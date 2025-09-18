@@ -1,0 +1,9 @@
+[package]
+name = "new-bridge-indexer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+avail-rust = { package = "avail-rust-client", git = "https://github.com/availproject/avail-rust", branch = "adding-new-rpcs", default-features = false, features = ["native", "reqwest"] }
+tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread"] }
+sqlx = { version = "0.8.6", default-features = false } 
