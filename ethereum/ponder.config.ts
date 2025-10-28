@@ -1,8 +1,7 @@
 import { createConfig, mergeAbis } from "ponder";
 import { BridgeImplAbi } from "./abis/BridgeImplAbi";
 import { BridgeProxyAbi } from "./abis/BridgeProxyAbi";
-import { IAddress } from "./src/types";
-import { execTransactionAbi } from "./abis/IdleFinanceExecAbi";
+import { Hex } from "viem";
 
 export default createConfig({
   chains: {
@@ -20,9 +19,9 @@ export default createConfig({
       chain: "mainnet",
       abi: mergeAbis([BridgeImplAbi, BridgeProxyAbi]),
       address:
-        (process.env.BRIDGE_PROXY_ETH as IAddress) ||
+        (process.env.BRIDGE_PROXY_ETH as Hex) ||
         "0x054fd961708D8E2B9c10a63F6157c74458889F0a",
-      startBlock: 17942156,
+      startBlock: 23000000,
     },
   },
 });
