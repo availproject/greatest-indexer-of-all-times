@@ -10,7 +10,7 @@ import {
 import { ponder } from "ponder:registry";
 import schema from "ponder:schema";
 import { BridgeImplAbi } from "../abis/BridgeImplAbi";
-import { DecodedResult } from "./types";
+import { DecodedResult, STATUS } from "./types";
 import { replaceBigInts } from "ponder";
 
 ponder.on("AvailBridgeV1:MessageReceived", async ({ event, context }) => {
@@ -39,12 +39,12 @@ ponder.on("AvailBridgeV1:MessageReceived", async ({ event, context }) => {
   );
 
   await context.db.insert(schema.bridgeEvent).values({
-    id: event.id,
     sender: event.args.from,
     receiver: event.args.to,
     messageId: event.args.messageId,
     amount: amount,
     eventType: "MessageReceived",
+    status: STATUS.BRIDGED,
   });
 });
 
@@ -76,13 +76,23 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
     String(v),
   ) as unknown as GetProofReturnType;
 
-  await context.db.insert(schema.bridgeEvent).values({
-    id: event.id,
-    sender: event.args.from,
-    receiver: event.args.to,
-    messageId: event.args.messageId,
-    amount: decoded.args[1] as bigint,
-    eventType: "MessageSent",
-    proof: bigIntAdjustedProof,
-  });
+  await context.db
+    .insert(schema.bridgeEvent)
+    .values({
+      messageId: event.args.messageId,
+      sender: event.args.from,
+      receiver: event.args.to,
+      amount: decoded.args[1] as bigint,
+      eventType: "MessageSent",
+      proof: bigIntAdjustedProof,
+      status: STATUS.IN_PROGRESS,
+    })
+    .onConflictDoUpdate((existing) => ({
+      sender: event.args.from,
+      receiver: event.args.to,
+      amount: decoded.args[1] as bigint,
+      eventType: "MessageSent",
+      proof: bigIntAdjustedProof,
+      status: STATUS.IN_PROGRESS,
+    }));
 });
