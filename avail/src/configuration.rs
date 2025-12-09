@@ -159,8 +159,8 @@ impl Configuration {
 				info!("ETH_TABLE_NAME from FILE");
 				value
 			} else {
-				info!("Failed to read ETH_TABLE_NAME either from ENV or config file. Defaulting to eth_send_message");
-				String::from("eth_send_message")
+				info!("Failed to read ETH_TABLE_NAME either from ENV or config file. Defaulting to avail_execute");
+				String::from("avail_execute")
 			};
 
 			s.execute = Some(TaskConfig {

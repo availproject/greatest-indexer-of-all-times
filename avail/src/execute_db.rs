@@ -24,20 +24,13 @@ impl Database {
 		let q = std::format!(
 			"
 				CREATE TABLE IF NOT EXISTS {} (
-					message_id BIGINT PRIMARY KEY,
-					status TEXT,
-					source_transaction_hash TEXT,
-					source_block_number BIGINT,
-					source_block_hash TEXT,
-					source_transaction_index BIGINT,
-					source_timestamp TIMESTAMPTZ,
-					source_token_address TEXT,
-					destination_transaction_hash TEXT,
-					destination_block_number BIGINT,
-					destination_block_hash TEXT,
-					destination_transaction_index BIGINT,
-					destination_timestamp TIMESTAMPTZ,
-					destination_token_address TEXT,
+					id BIGINT PRIMARY KEY,
+					block_hash TEXT,
+					block_height BIGINT,
+					tx_hash TEXT,
+					tx_index BIGINT,
+					block_timestamp TIMESTAMPTZ,
+					token_address TEXT,
 					depositor_address TEXT,
 					receiver_address TEXT,
 					amount TEXT
@@ -51,7 +44,7 @@ impl Database {
 	}
 
 	pub async fn find_highest_source_block_number(&self) -> Result<Option<u32>, String> {
-		let q = std::format!("SELECT MAX(source_block_number) FROM {}", self.table_name);
+		let q = std::format!("SELECT MAX(block_height) FROM {}", self.table_name);
 		let row = sqlx::query(&q)
 			.fetch_optional(&self.conn)
 			.await
@@ -62,15 +55,15 @@ impl Database {
 		};
 
 		let block_number = row
-			.try_get::<i64, _>("max")
-			.map_err(|e| std::format!("Failed to convert source_block_number. Error: {}", e.to_string()))?;
+			.try_get::<Option<i64>, _>("max")
+			.map_err(|e| std::format!("Failed to convert block_height. Error: {}", e.to_string()))?
+			.map(|x| x as u32);
 
-		Ok(Some(block_number as u32))
+		Ok(block_number)
 	}
 
 	pub async fn row_exists(&self, message_id: u64) -> Result<bool, String> {
-		let q =
-			std::format!("SELECT EXISTS (SELECT 1 FROM {} WHERE message_id={})", self.table_name, message_id as i64);
+		let q = std::format!("SELECT EXISTS (SELECT 1 FROM {} WHERE id={})", self.table_name, message_id as i64);
 		let row = sqlx::query(&q).fetch_one(&self.conn).await.map_err(|e| e.to_string())?;
 
 		let exists = row
@@ -83,19 +76,18 @@ impl Database {
 	pub async fn store_send_message(&self, value: &SendMessageDb) -> Result<(), String> {
 		let q = std::format!(
 				"
-					INSERT INTO {} (message_id, status, source_transaction_hash, source_block_number, source_block_hash, source_transaction_index, source_timestamp, source_token_address, depositor_address, receiver_address, amount)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+					INSERT INTO {} (id, block_hash, block_height, tx_hash, tx_index, block_timestamp, token_address, depositor_address, receiver_address, amount)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
 					self.table_name
 				);
 		let _ = sqlx::query(&q)
-			.bind(value.message_id as i64)
-			.bind(value.status.as_str())
-			.bind(std::format!("{:?}", value.source_transaction_hash))
-			.bind(value.source_block_number as i64)
-			.bind(std::format!("{:?}", value.source_block_hash))
-			.bind(value.source_transaction_index as i64)
-			.bind(DateTime::from_timestamp(value.source_timestamp as i64, 0))
-			.bind(std::format!("{:?}", value.source_token_address))
+			.bind(value.id as i64)
+			.bind(std::format!("{:?}", value.block_hash))
+			.bind(value.block_height as i64)
+			.bind(std::format!("{:?}", value.tx_hash))
+			.bind(value.tx_index as i64)
+			.bind(DateTime::from_timestamp(value.block_timestamp as i64, 0))
+			.bind(std::format!("{:?}", value.token_address))
 			.bind(std::format!("{}", value.depositor_address))
 			.bind(std::format!("{:?}", value.receiver_address))
 			.bind(std::format!("{}", value.amount))
@@ -111,68 +103,38 @@ pub struct SendMessageDb {
 	/// 4 High bytes are block height (u32)
 	/// 4 Low bytes are transaction index (u32)
 	/// Example:
-	///	message_id: u64 = (block_height as u64) << 32 | transaction_index as u64
+	///	id: u64 = (block_height as u64) << 32 | transaction_index as u64
 	///
 	/// In the DB this is stored as "i64" ¯\_(ツ)_/¯
-	pub message_id: u64,
-	/// PG i64
-	/// It is actually an ENUM
-	/// - IN_PROGRESS
-	/// - CLAIM_PENDING
-	/// - BRIDGED
-	status: String,
-	/// Transaction Hash.
+	pub id: u64,
+	/// Block Hash.
 	/// To make it DB friendly we hex encode it.
 	///
 	/// In the DB this is stored as TEXT
-	source_transaction_hash: H256,
+	block_hash: H256,
 	/// Block Height at which the Tx was executed
 	///
 	/// In the DB this is stored as "i64" ¯\_(ツ)_/¯
-	source_block_number: u32,
-	/// Block Hash at which the Tx was executed.
+	block_height: u32,
+	/// Transaction Hash at which the Tx was executed.
 	/// To make it DB friendly we hex encode it
 	///
 	/// In the DB this is stored as TEXT
-	source_block_hash: H256,
+	tx_hash: H256,
 	/// Transaction index.
 	///
 	/// In the DB this is stored as "i64" ¯\_(ツ)_/¯
-	source_transaction_index: u32,
+	tx_index: u32,
 	/// TODO
 	///
 	///
 	///
-	source_timestamp: u64,
+	block_timestamp: u64,
 	/// This is Vector::SendMessage::FungibleToken::AssetId
 	/// AssetId is in H256 so to make it db friendly we hex encode it
 	///
 	/// In the DB this is stored as TEXT
-	source_token_address: H256,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as TEXT
-	destination_transaction_hash: Option<H256>,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as i64
-	destination_block_number: Option<u32>,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as TEXT
-	destination_block_hash: Option<H256>,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as i64
-	destination_transaction_index: Option<u32>,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as Timestamp
-	destination_timestamp: Option<u64>,
-	/// Not our problem :)
-	///
-	/// In the DB we store this as TEXT
-	destination_token_address: Option<H256>,
+	token_address: H256,
 	/// Transaction signer address
 	/// To make it DB friendly we SS58 encode it.
 	///
@@ -203,20 +165,13 @@ impl SendMessageDb {
 		amount: u128,
 	) -> Self {
 		Self {
-			message_id: (block_height as u64) << 32 | tx_index as u64,
-			status: String::from("IN_PROGRESS"),
-			source_transaction_hash: tx_hash,
-			source_block_number: block_height,
-			source_block_hash: block_hash,
-			source_transaction_index: tx_index,
-			source_timestamp: timestamp,
-			source_token_address: token_address,
-			destination_transaction_hash: None,
-			destination_block_number: None,
-			destination_block_hash: None,
-			destination_transaction_index: None,
-			destination_timestamp: None,
-			destination_token_address: None,
+			id: (block_height as u64) << 32 | tx_index as u64,
+			block_hash,
+			block_height,
+			tx_hash,
+			tx_index,
+			block_timestamp: timestamp,
+			token_address,
 			depositor_address,
 			receiver_address,
 			amount,

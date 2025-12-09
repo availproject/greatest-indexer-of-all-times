@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use crate::{
 	configuration::TaskConfig,
-	db::{self, SendMessageDb},
 	fetch_block_timestamp_and_failed_txs, get_block_height,
 	parse::{SendMsgOrExecute, Target},
+	send_message_db::{self, SendMessageDb},
 };
 use avail_rust::{
 	BlockEvents, HasHeader, MultiAddress,
@@ -37,7 +37,7 @@ pub async fn run_indexer(config: TaskConfig) {
 }
 
 async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Result<(), String> {
-	let db = db::Database::new(&config.db_url, config.table_name.clone())
+	let db = send_message_db::Database::new(&config.db_url, config.table_name.clone())
 		.await
 		.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
 	db.create_table().await?;
@@ -93,6 +93,7 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 			let Message::FungibleToken { asset_id, amount } = &sm.message else {
 				continue;
 			};
+
 			let MultiAddress::Id(id) = &target.address else {
 				continue;
 			};
@@ -157,7 +158,7 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 				*amount,
 			);
 
-			let exists = db.row_exists(sm.message_id).await?;
+			let exists = db.row_exists(sm.id).await?;
 			if exists {
 				info!(
 					"✉️  Fetched Send Message already in db. Block Height: {}, Tx Index: {}",

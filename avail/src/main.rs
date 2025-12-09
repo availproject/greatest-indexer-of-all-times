@@ -1,9 +1,10 @@
 mod configuration;
-mod db;
 mod error;
 mod execute;
+mod execute_db;
 mod parse;
 mod send_message;
+mod send_message_db;
 mod sync;
 
 use avail_rust::{
@@ -65,7 +66,7 @@ fn setup_tracing() {
 
 async fn get_block_height(
 	block_height: Option<u32>,
-	db: &db::Database,
+	db: &send_message_db::Database,
 	node: &avail_rust::Client,
 ) -> Result<u32, String> {
 	if let Some(block_height) = block_height {

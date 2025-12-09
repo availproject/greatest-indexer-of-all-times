@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use crate::{
 	configuration::TaskConfig,
-	db::{self, SendMessageDb},
 	fetch_block_timestamp_and_failed_txs, get_block_height,
-	parse::{SendMsgOrExecute, Target},
+	parse::SendMsgOrExecute,
+	send_message_db::{self},
 };
 use avail_rust::{
 	BlockEvents, HasHeader, MultiAddress,
@@ -37,7 +37,7 @@ pub async fn run_indexer(config: TaskConfig) {
 }
 
 async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Result<(), String> {
-	let db = db::Database::new(&config.db_url, config.table_name.clone())
+	let db = send_message_db::Database::new(&config.db_url, config.table_name.clone())
 		.await
 		.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
 	db.create_table().await?;
@@ -82,6 +82,14 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 		let block_events = BlockEvents::new(node.clone(), block_info.height);
 		for target in iter {
 			let SendMsgOrExecute::Execute(ex) = &target.call else {
+				continue;
+			};
+
+			let Message::FungibleToken { asset_id, amount } = &ex.addr_message.message else {
+				continue;
+			};
+
+			let MultiAddress::Id(id) = &target.address else {
 				continue;
 			};
 
