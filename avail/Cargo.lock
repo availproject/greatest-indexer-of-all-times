@@ -243,9 +243,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "avail-rust-client"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca07e8d66c0a213b285d8f6e35feccbe43fbdb2ef61616a9abec149872cdceeb"
+checksum = "e220c1235278a8a2f3161addc8b510c586caacfde7dd7a1da1810452e2bf0add"
 dependencies = [
  "avail-rust-core",
  "const-hex",
@@ -263,9 +263,9 @@ dependencies = [
 
 [[package]]
 name = "avail-rust-core"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67cce092908f0beb9f570b20d150dc1ab5cc2f56ffe552642312b063bf4af1d5"
+checksum = "bfb1b3bb68aec2f37e19554fbb225a45b48539296f744198c5d9888b3b083be3"
 dependencies = [
  "const-hex",
  "impl-serde",
@@ -274,6 +274,7 @@ dependencies = [
  "scale-decode",
  "scale-encode",
  "scale-info",
+ "schnorrkel",
  "serde",
  "serde_json",
  "sp-crypto-hashing",

@@ -7,14 +7,14 @@ use crate::{
 	send_message_db::{self},
 };
 use avail_rust::{
-	BlockEvents, HasHeader, MultiAddress,
+	HasHeader, MultiAddress,
 	avail::{
 		multisig::tx::AsMulti,
 		proxy::tx::Proxy,
 		vector::{tx::Execute, types::Message},
 	},
-	block_api::BlockExtOptionsExpanded,
-	subscription::RawExtrinsicSub,
+	block::{BlockEventsQuery, extrinsic_options::Options},
+	subscription::EncodedExtrinsicSub,
 };
 use tracing::info;
 use tracing::{error as terror, warn};
@@ -51,35 +51,35 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 	let tracked_calls: Vec<(u8, u8)> = vec![Execute::HEADER_INDEX, AsMulti::HEADER_INDEX, Proxy::HEADER_INDEX];
 
 	// Create a subscription
-	let opts = BlockExtOptionsExpanded { filter: Some(tracked_calls.into()), ..Default::default() };
-	let mut sub = RawExtrinsicSub::new(node.clone(), opts);
+	let opts = Options { filter: Some(tracked_calls.into()), ..Default::default() };
+	let mut sub = EncodedExtrinsicSub::new(node.clone(), opts);
 	sub.set_block_height(block_height);
 
 	// Run subscription
 	// For testing we will fetch the next 10 instances
 	loop {
-		let (list, block_info) = match sub.next().await {
+		let value = match sub.next().await {
 			Ok(x) => x,
 			Err(err) => {
 				return Err(std::format!("Failed to fetch extrinsics from submission. Error: {}", err.to_string()));
 			},
 		};
 
-		*restart_block_height = Some(block_info.height);
+		*restart_block_height = Some(value.block_height);
 
-		let (timestamp, _) = fetch_block_timestamp_and_failed_txs(node.clone(), block_info.hash).await?;
+		let (timestamp, _) = fetch_block_timestamp_and_failed_txs(node.clone(), value.block_hash).await?;
 
 		// If this fails, it means we failed to decode SendMessage, Execute, AsMulti or Proxy.
-		let targets = crate::parse::parse_transactions(&list)?;
+		let targets = crate::parse::parse_transactions(&value.list)?;
 		let iter = targets.iter().filter(|x| x.is_execute());
 		let count = iter.clone().count();
 		if count == 0 {
 			continue;
 		}
 
-		info!("☠️  Found {} Execute transactions at height: {}", count, block_info.height);
+		info!("☠️  Found {} Execute transactions at height: {}", count, value.block_height);
 
-		let block_events = BlockEvents::new(node.clone(), block_info.height);
+		let events_query = BlockEventsQuery::new(node.clone(), value.block_height);
 		for target in iter {
 			let SendMsgOrExecute::Execute(ex) = &target.call else {
 				continue;
@@ -94,27 +94,19 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 			};
 
 			// Fetch events
-			let events = block_events.ext(target.ext_index).await.map_err(|e| {
+			let events = events_query.extrinsic(target.ext_index).await.map_err(|e| {
 				std::format!(
 					"Failed to fetch events for Execute transaction. Block Height: {}, Tx Index: {}, Reason: {}",
-					block_info.height,
+					value.block_height,
 					target.ext_index,
 					e.to_string()
 				)
 			})?;
 
-			let Some(events) = events else {
-				return Err(std::format!(
-					"Failed to find events for Execute transaction. Block Height: {}, Tx Index: {}",
-					block_info.height,
-					target.ext_index,
-				));
-			};
-
 			if events.is_extrinsic_failed_present() {
 				warn!(
 					"Execute transaction has ExtrinsicFailed event. Skipping this transaction. Block Height: {}, Tx Index: {}",
-					block_info.height, target.ext_index
+					value.block_height, target.ext_index
 				);
 				continue;
 			}
@@ -124,7 +116,7 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 			{
 				warn!(
 					"Execute transaction is inside Multisig and MultisigExecuted resulted in an error. Skipping this transaction. Block Height: {}, Tx Index: {}",
-					block_info.height, target.ext_index
+					value.block_height, target.ext_index
 				);
 				continue;
 			}
@@ -134,7 +126,7 @@ async fn task(config: &TaskConfig, restart_block_height: &mut Option<u32>) -> Re
 			{
 				warn!(
 					"Execute transaction is inside Proxy and Proxy resulted in an error. Skipping this transaction. Block Height: {}, Tx Index: {}",
-					block_info.height, target.ext_index
+					value.block_height, target.ext_index
 				);
 				continue;
 			}

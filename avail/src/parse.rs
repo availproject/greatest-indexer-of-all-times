@@ -1,5 +1,5 @@
 use avail_rust::{
-	BlockRawExtrinsic, ExtrinsicCall, H256, HasHeader, MultiAddress, RawExtrinsic,
+	ExtrinsicCall, H256, HasHeader, MultiAddress,
 	avail::{
 		multisig::tx::AsMulti,
 		proxy::tx::Proxy,
@@ -8,6 +8,7 @@ use avail_rust::{
 			types::Message,
 		},
 	},
+	block::BlockEncodedExtrinsic,
 	codec::Decode,
 };
 
@@ -79,25 +80,21 @@ pub struct Wrapped {
 	pub inside_proxy: bool,
 }
 
-pub fn parse_transactions(list: &Vec<BlockRawExtrinsic>) -> Result<Vec<Target>, String> {
+pub fn parse_transactions(list: &Vec<BlockEncodedExtrinsic>) -> Result<Vec<Target>, String> {
 	let mut targets: Vec<Target> = Vec::with_capacity(list.len());
-	for tx in list {
-		let Some(raw_ext) = &tx.data else {
-			return Err("Failed to fetch transaction with data. This is not good.".into());
-		};
-		let metadata = tx.metadata.clone();
+	for ext in list {
+		let metadata = ext.metadata.clone();
 
-		let raw_ext = RawExtrinsic::try_from(raw_ext.as_str())?;
-		let Some(signature) = raw_ext.signature else {
+		let Some(signature) = &ext.signature else {
 			return Err("Extrinsic did not had signature. This is not good".into());
 		};
 
 		let mut wrapped = Wrapped::default();
-		let call = ExtrinsicCall::try_from(&raw_ext.call)?;
+		let call = ExtrinsicCall::try_from(&ext.call)?;
 		let Some(call) = parse_extrinsic_call(&call, &mut wrapped)? else {
 			continue;
 		};
-		let target = Target::new(signature.address, metadata.ext_hash, metadata.ext_index, call, wrapped);
+		let target = Target::new(signature.address.clone(), metadata.ext_hash, metadata.ext_index, call, wrapped);
 
 		targets.push(target);
 	}

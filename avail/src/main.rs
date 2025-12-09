@@ -8,9 +8,9 @@ mod send_message_db;
 mod sync;
 
 use avail_rust::{
-	BlockExtrinsic, BlockWithRawExt, H256, HasHeader,
+	H256, HasHeader,
 	avail::{timestamp::tx::Set, vector::tx::FailedSendMessageTxs},
-	block_api::BlockExtOptionsExpanded,
+	block::{BlockEncodedExtrinsicsQuery, BlockExtrinsic, extrinsic_options::Options},
 };
 use tokio::runtime::Runtime;
 use tracing::error as terror;
@@ -86,9 +86,9 @@ async fn fetch_block_timestamp_and_failed_txs(
 ) -> Result<(u64, Vec<u32>), String> {
 	let tracked_calls: Vec<(u8, u8)> = vec![Set::HEADER_INDEX, FailedSendMessageTxs::HEADER_INDEX];
 
-	let block = BlockWithRawExt::new(node, block_hash);
-	let opts = BlockExtOptionsExpanded { filter: Some(tracked_calls.into()), ..Default::default() };
-	let raw_exts = block.all(opts).await.map_err(|e| {
+	let query = BlockEncodedExtrinsicsQuery::new(node, block_hash.into());
+	let opts = Options { filter: Some(tracked_calls.into()), ..Default::default() };
+	let raw_exts = query.all(opts).await.map_err(|e| {
 		std::format!("Failed to fetch block timestamp and failed txs extrinsics. Error: {}", e.to_string())
 	})?;
 
