@@ -1,0 +1,10 @@
+build:
+    just fmt
+check:
+    cargo check && just fmt
+fmt:
+    cargo +nightly fmt
+lint:
+    cargo clippy
+lint-fix:
+    cargo clippy --fix

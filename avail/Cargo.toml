@@ -5,5 +5,8 @@ edition = "2024"
 
 [dependencies]
 avail-rust = { package = "avail-rust-client", git = "https://github.com/availproject/avail-rust", branch = "adding-new-rpcs", default-features = false, features = ["native", "reqwest"] }
-tokio = { version = "1.47.1", default-features = false, features = ["rt-multi-thread"] }
-sqlx = { version = "0.8.6", default-features = false } 
+tokio = { version = "1.47", default-features = false, features = ["rt-multi-thread"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "postgres"] } 
+tabled = { version = "0.20" }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
