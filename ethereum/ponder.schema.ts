@@ -3,7 +3,7 @@ import { GetProofReturnType } from "viem";
 import { STATUS } from "./src/types";
 
 export const bridgeEvent = onchainTable(
-  "bridgeEvent",
+  "bridge_event",
   (t) => ({
     messageId: t.bigint().notNull(),
     sender: t.hex().notNull(),

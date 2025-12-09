@@ -4,7 +4,7 @@ export interface DecodedResult<T = unknown> {
 
 export enum STATUS {
   INITIATED = "initiated",
-  IN_PROGRESS = "in progress",
-  CLAIM_READY = "claim ready",
+  IN_PROGRESS = "in_progress",
+  CLAIM_READY = "claim_ready",
   BRIDGED = "bridged",
 }
