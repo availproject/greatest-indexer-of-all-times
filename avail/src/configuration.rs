@@ -6,6 +6,8 @@ pub struct ConfigurationFile {
 	pub db_url: Option<String>,
 	pub avail_url: Option<String>,
 	pub block_height: Option<String>,
+	pub avail_table_name: Option<String>,
+	pub eth_table_name: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
@@ -13,6 +15,8 @@ pub struct Configuration {
 	pub db_url: String,
 	pub avail_url: String,
 	pub block_height: Option<u32>,
+	pub avail_table_name: String,
+	pub eth_table_name: String,
 }
 
 impl Configuration {
@@ -48,7 +52,7 @@ impl Configuration {
 			value
 		} else {
 			info!("Failed to read AVAIL_URL either from ENV or config file. Defaulting to Turing");
-			avail_rust::prelude::TURING_ENDPOINT.to_owned()
+			avail_rust::prelude::MAINNET_ENDPOINT.to_owned()
 		};
 
 		let block_height: Option<u32> = if let Ok(value) = env::var("BLOCK_HEIGHT") {
@@ -72,6 +76,34 @@ impl Configuration {
 			None
 		};
 
-		Ok(Self { db_url, avail_url, block_height })
+		let avail_table_name = if let Ok(value) = env::var("AVAIL_TABLE_NAME") {
+			info!("AVAIL_TABLE_NAME from ENV");
+			value
+		} else if let Some(value) = config_file.avail_table_name {
+			info!("AVAIL_TABLE_NAME from FILE");
+			value
+		} else {
+			info!("Failed to read AVAIL_TABLE_NAME either from ENV or config file. Defaulting to avail_send_message");
+			String::from("avail_send_message")
+		};
+
+		let eth_table_name = if let Ok(value) = env::var("ETH_TABLE_NAME") {
+			info!("ETH_TABLE_NAME from ENV");
+			value
+		} else if let Some(value) = config_file.eth_table_name {
+			info!("ETH_TABLE_NAME from FILE");
+			value
+		} else {
+			info!("Failed to read ETH_TABLE_NAME either from ENV or config file. Defaulting to eth_send_message");
+			String::from("eth_send_message")
+		};
+
+		Ok(Self {
+			db_url,
+			avail_url,
+			block_height,
+			avail_table_name,
+			eth_table_name,
+		})
 	}
 }
