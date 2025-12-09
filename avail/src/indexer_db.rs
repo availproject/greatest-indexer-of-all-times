@@ -74,23 +74,35 @@ impl Database {
 		Ok(exists)
 	}
 
-	pub async fn store(&self, value: DbEntry) -> Result<(), String> {
+	pub async fn insert(&self, value: DbEntry) -> Result<(), String> {
 		let q = std::format!(
 			"
-					INSERT INTO {} (
-						id,
-						block_height,
-						block_hash,
-						block_timestamp,
-						ext_index,
-						ext_hash,
-						signature_address,
-						pallet_id,
-						variant_id,
-						ext_success,
-						ext_call
-					)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+				INSERT INTO {} (
+					id,
+					block_height,
+					block_hash,
+					block_timestamp,
+					ext_index,
+					ext_hash,
+					signature_address,
+					pallet_id,
+					variant_id,
+					ext_success,
+					ext_call
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				ON CONFLICT (id) DO UPDATE SET
+					block_height = EXCLUDED.block_height,
+					block_hash = EXCLUDED.block_hash,
+					block_timestamp = EXCLUDED.block_timestamp,
+					ext_index = EXCLUDED.ext_index,
+					ext_hash = EXCLUDED.ext_hash,
+					signature_address = EXCLUDED.signature_address,
+					pallet_id = EXCLUDED.pallet_id,
+					variant_id = EXCLUDED.variant_id,
+					ext_success = EXCLUDED.ext_success,
+					ext_call = EXCLUDED.ext_call
+			",
 			self.table_name
 		);
 		let block_timestamp = DateTime::<Utc>::from_timestamp(value.block_timestamp as i64, 0)

@@ -131,7 +131,7 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 	let node = avail_rust::Client::new(&config.avail_url)
 		.await
 		.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
-	let block_height = get_block_height(config.block_height, &db, &node).await?;
+	let start_block_height = get_block_height(config.block_height, &db, &node).await?;
 
 	// Here we define what extrinsics we will follow
 	let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
@@ -139,7 +139,7 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 	// Create a subscription
 	let opts = Options::default().filter(tracked_calls);
 	let mut ext_sub = EncodedExtrinsicSub::new(node.clone(), opts);
-	ext_sub.set_block_height(block_height);
+	ext_sub.set_block_height(start_block_height);
 
 	// Run subscription
 	loop {
@@ -149,7 +149,6 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 				return Err(std::format!("Failed to fetch extrinsics from subscription. Error: {}", err.to_string()));
 			},
 		};
-
 		*restart_block_height = Some(value.block_height);
 
 		let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), value.block_hash).await?;
@@ -157,7 +156,7 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 		let mut db_entries: Vec<DbEntry> = Vec::with_capacity(value.list.len());
 		for ext in value.list {
 			let mut entry = DbEntry {
-				id: (block_height as u64) << 32 | ext.metadata.ext_index as u64,
+				id: (value.block_height as u64) << 32 | ext.metadata.ext_index as u64,
 				block_height: value.block_height,
 				block_hash: value.block_hash,
 				block_timestamp: timestamp,
@@ -180,12 +179,12 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 					warn!(
 						block_height = entry.block_height,
 						extrinsic_index = entry.ext_index,
-						"✉️ Send Message found but skipped as it ext index is in failed txs list",
+						"✉️  Send Message found but skipped as it ext index is in failed txs list",
 					);
 					continue;
 				}
 
-				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "✉️ Send Message.",);
+				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "✉️  Send Message",);
 				let serialized_call = SerializeSendMessage::from(send_message);
 				let serialized_call = match serde_json::to_string(&serialized_call) {
 					Ok(x) => x,
@@ -199,7 +198,7 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 			}
 
 			if let Ok(execute) = Execute::from_call(&ext.call) {
-				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "☠️ Execute",);
+				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "☠️  Execute",);
 				let serialized_call = SerializeExecute::from(execute);
 				let serialized_call = match serde_json::to_string(&serialized_call) {
 					Ok(x) => x,
@@ -211,6 +210,10 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 				db_entries.push(entry);
 				continue;
 			}
+		}
+
+		for entry in db_entries {
+			db.insert(entry).await?;
 		}
 	}
 }

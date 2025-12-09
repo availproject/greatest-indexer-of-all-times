@@ -71,10 +71,10 @@ impl Configuration {
 		};
 
 		let table_name = if let Ok(value) = env::var("TABLE_NAME") {
-			info!("TABLE_NAME from ENV");
+			info!(table_name = value, "TABLE_NAME from ENV");
 			value
 		} else if let Some(value) = config_file.table_name {
-			info!("TABLE_NAME from FILE");
+			info!(table_name = value, "TABLE_NAME from FILE");
 			value
 		} else {
 			info!("Failed to read TABLE_NAME either from ENV or config file. Defaulting to avail_table");
