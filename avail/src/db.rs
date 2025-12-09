@@ -5,18 +5,17 @@ use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 
 pub struct Database {
 	conn: Pool<Postgres>,
-	avail_table_name: String,
-	eth_table_name: String,
+	table_name: String,
 }
 
 impl Database {
-	pub async fn new(url: &str, avail_table_name: String, eth_table_name: String) -> Result<Self, String> {
+	pub async fn new(url: &str, table_name: String) -> Result<Self, String> {
 		let conn = PgPoolOptions::new()
 			.max_connections(5)
 			.connect(&url)
 			.await
 			.map_err(|x| x.to_string())?;
-		let s = Self { conn, avail_table_name, eth_table_name };
+		let s = Self { conn, table_name };
 
 		Ok(s)
 	}
@@ -24,7 +23,7 @@ impl Database {
 	pub async fn create_table(&self) -> Result<(), String> {
 		let q = std::format!(
 			"
-				CREATE TABLE  IF NOT EXISTS {} (
+				CREATE TABLE IF NOT EXISTS {} (
 					message_id BIGINT PRIMARY KEY,
 					status TEXT,
 					source_transaction_hash TEXT,
@@ -44,15 +43,15 @@ impl Database {
 					amount TEXT
 				);
 			",
-			self.avail_table_name
+			self.table_name
 		);
 
-		sqlx::query(&q).execute(&self.conn).await.map_err(|e| e.to_string());
+		sqlx::query(&q).execute(&self.conn).await.map_err(|e| e.to_string())?;
 		Ok(())
 	}
 
 	pub async fn find_highest_source_block_number(&self) -> Result<Option<u32>, String> {
-		let q = std::format!("SELECT MAX(source_block_number) FROM {}", self.avail_table_name);
+		let q = std::format!("SELECT MAX(source_block_number) FROM {}", self.table_name);
 		let row = sqlx::query(&q)
 			.fetch_optional(&self.conn)
 			.await
@@ -69,14 +68,26 @@ impl Database {
 		Ok(Some(block_number as u32))
 	}
 
+	pub async fn row_exists(&self, message_id: u64) -> Result<bool, String> {
+		let q =
+			std::format!("SELECT EXISTS (SELECT 1 FROM {} WHERE message_id={})", self.table_name, message_id as i64);
+		let row = sqlx::query(&q).fetch_one(&self.conn).await.map_err(|e| e.to_string())?;
+
+		let exists = row
+			.try_get::<bool, _>("exists")
+			.map_err(|e| std::format!("Failed to convert exists. Error: {}", e.to_string()))?;
+
+		Ok(exists)
+	}
+
 	pub async fn store_send_message(&self, value: &SendMessageDb) -> Result<(), String> {
 		let q = std::format!(
-					"
+				"
 					INSERT INTO {} (message_id, status, source_transaction_hash, source_block_number, source_block_hash, source_transaction_index, source_timestamp, source_token_address, depositor_address, receiver_address, amount)
 					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-					self.avail_table_name
+					self.table_name
 				);
-		let res = sqlx::query(&q)
+		let _ = sqlx::query(&q)
 			.bind(value.message_id as i64)
 			.bind(value.status.as_str())
 			.bind(std::format!("{:?}", value.source_transaction_hash))
@@ -90,8 +101,7 @@ impl Database {
 			.bind(std::format!("{}", value.amount))
 			.execute(&self.conn)
 			.await
-			.map_err(|e| e.to_string());
-		res.unwrap();
+			.map_err(|e| e.to_string())?;
 
 		Ok(())
 	}
@@ -104,7 +114,7 @@ pub struct SendMessageDb {
 	///	message_id: u64 = (block_height as u64) << 32 | transaction_index as u64
 	///
 	/// In the DB this is stored as "i64" ¯\_(ツ)_/¯
-	message_id: u64,
+	pub message_id: u64,
 	/// PG i64
 	/// It is actually an ENUM
 	/// - IN_PROGRESS
