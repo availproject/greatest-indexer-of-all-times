@@ -6,6 +6,8 @@ pub struct ConfigurationFile {
 	pub db_url: Option<String>,
 	pub avail_url: Option<String>,
 	pub table_name: Option<String>,
+	pub send_message_table_name: Option<String>,
+	pub execute_table_name: Option<String>,
 	pub block_height: Option<u32>,
 }
 
@@ -14,6 +16,8 @@ pub struct Configuration {
 	pub db_url: String,
 	pub avail_url: String,
 	pub table_name: String,
+	pub send_message_table_name: String,
+	pub execute_table_name: String,
 	pub block_height: Option<u32>,
 }
 
@@ -43,25 +47,25 @@ impl Configuration {
 		};
 
 		let avail_url = if let Ok(value) = env::var("AVAIL_URL") {
-			info!(avail_url = value, "AVAIL_URL from ENV");
+			info!(avail_url = value, source = "env", "AVAIL_URL");
 			value
 		} else if let Some(value) = config_file.avail_url {
-			info!(avail_url = value, "AVAIL_URL from FILE");
+			info!(avail_url = value, source = "file", "AVAIL_URL");
 			value
 		} else {
-			info!("Failed to read AVAIL_URL either from ENV or config file. Defaulting to Turing");
+			info!("Failed to read AVAIL_URL either from ENV or config file. Defaulting to Mainnet");
 			avail_rust::prelude::MAINNET_ENDPOINT.to_owned()
 		};
 
 		let block_height: Option<u32> = if let Ok(value) = env::var("BLOCK_HEIGHT") {
-			info!(block_height = value, "BLOCK_HEIGHT from ENV");
+			info!(block_height = value, source = "env", "BLOCK_HEIGHT");
 			Some(
 				value
 					.parse::<u32>()
 					.map_err(|e| std::format!("Failed to parse BLOCK_HEIGHT as u32. {}", e))?,
 			)
 		} else if let Some(value) = config_file.block_height {
-			info!(block_height = value, "BLOCK_HEIGHT from FILE");
+			info!(block_height = value, source = "file", "BLOCK_HEIGHT");
 			Some(value)
 		} else {
 			info!(
@@ -71,16 +75,49 @@ impl Configuration {
 		};
 
 		let table_name = if let Ok(value) = env::var("TABLE_NAME") {
-			info!(table_name = value, "TABLE_NAME from ENV");
+			info!(table_name = value, source = "env", "TABLE_NAME");
 			value
 		} else if let Some(value) = config_file.table_name {
-			info!(table_name = value, "TABLE_NAME from FILE");
+			info!(table_name = value, source = "file", "TABLE_NAME");
 			value
 		} else {
 			info!("Failed to read TABLE_NAME either from ENV or config file. Defaulting to avail_table");
 			String::from("avail_table")
 		};
 
-		Ok(Configuration { db_url, avail_url, table_name, block_height })
+		let send_message_table_name = if let Ok(value) = env::var("SEND_MESSAGE_TABLE_NAME") {
+			info!(table_name = value, source = "env", "SEND_MESSAGE_TABLE_NAME");
+			value
+		} else if let Some(value) = config_file.send_message_table_name {
+			info!(table_name = value, source = "file", "SEND_MESSAGE_TABLE_NAME");
+			value
+		} else {
+			info!(
+				"Failed to read SEND_MESSAGE_TABLE_NAME either from ENV or config file. Defaulting to avail_send_message_table"
+			);
+			String::from("avail_send_message_table")
+		};
+
+		let execute_table_name = if let Ok(value) = env::var("EXECUTE_TABLE_NAME") {
+			info!(table_name = value, source = "env", "EXECUTE_TABLE_NAME");
+			value
+		} else if let Some(value) = config_file.execute_table_name {
+			info!(table_name = value, source = "file", "EXECUTE_TABLE_NAME");
+			value
+		} else {
+			info!(
+				"Failed to read EXECUTE_TABLE_NAME either from ENV or config file. Defaulting to avail_execute_table"
+			);
+			String::from("avail_execute_table")
+		};
+
+		Ok(Configuration {
+			db_url,
+			avail_url,
+			table_name,
+			block_height,
+			send_message_table_name,
+			execute_table_name,
+		})
 	}
 }

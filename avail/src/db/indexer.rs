@@ -4,18 +4,30 @@ use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
 
 pub struct Database {
-	conn: Pool<Postgres>,
-	table_name: String,
+	pub conn: Pool<Postgres>,
+	pub table_name: String,
+	pub send_message_table_name: String,
+	pub execute_table_name: String,
 }
 
 impl Database {
-	pub async fn new(url: &str, table_name: String) -> Result<Self, String> {
+	pub async fn new(
+		url: &str,
+		table_name: String,
+		send_message_table_name: String,
+		execute_table_name: String,
+	) -> Result<Self, String> {
 		let conn = PgPoolOptions::new()
 			.max_connections(5)
 			.connect(&url)
 			.await
 			.map_err(|x| x.to_string())?;
-		let s = Self { conn, table_name };
+		let s = Self {
+			conn,
+			table_name,
+			send_message_table_name,
+			execute_table_name,
+		};
 
 		Ok(s)
 	}

@@ -1,6 +1,6 @@
 mod configuration;
+mod db;
 mod indexer;
-mod indexer_db;
 
 use std::time::Duration;
 

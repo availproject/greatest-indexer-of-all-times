@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{
 	configuration::Configuration,
-	indexer_db::{self, DbEntry},
+	db::{self, Database, DbEntry, execute_table::ExecuteTable, send_message_table::SendMessageTable},
 };
 use avail_rust::{
 	ExtrinsicDecodable, H256, HasHeader,
@@ -50,6 +50,22 @@ impl From<Message> for SerializedMessage {
 		match value {
 			Message::ArbitraryMessage(items) => Self::ArbitraryMessage(const_hex::encode_prefixed(items)),
 			Message::FungibleToken { asset_id, amount } => Self::FungibleToken { asset_id, amount },
+		}
+	}
+}
+
+impl SerializedMessage {
+	pub fn kind(&self) -> &str {
+		match self {
+			SerializedMessage::ArbitraryMessage(_) => "ArbitraryMessage",
+			SerializedMessage::FungibleToken { asset_id: _, amount: _ } => "FungibleToken",
+		}
+	}
+
+	pub fn amount(&self) -> Option<u128> {
+		match self {
+			SerializedMessage::ArbitraryMessage(_) => None,
+			SerializedMessage::FungibleToken { asset_id: _, amount } => Some(amount.clone()),
 		}
 	}
 }
@@ -123,10 +139,17 @@ impl From<Execute> for SerializeExecute {
 }
 
 async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) -> Result<(), String> {
-	let db = indexer_db::Database::new(&config.db_url, config.table_name.clone())
-		.await
-		.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
+	let db = Database::new(
+		&config.db_url,
+		config.table_name.clone(),
+		config.send_message_table_name.clone(),
+		config.execute_table_name.clone(),
+	)
+	.await
+	.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
 	db.create_table().await?;
+	ExecuteTable::create_table(&db).await?;
+	SendMessageTable::create_table(&db).await?;
 
 	let node = avail_rust::Client::new(&config.avail_url)
 		.await
@@ -154,8 +177,11 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 		let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), value.block_hash).await?;
 
 		let mut db_entries: Vec<DbEntry> = Vec::with_capacity(value.list.len());
+		let mut send_message_entries: Vec<db::send_message_table::TableEntry> = Vec::with_capacity(value.list.len());
+		let mut execute_entries: Vec<db::execute_table::TableEntry> = Vec::with_capacity(value.list.len());
+
 		for ext in value.list {
-			let mut entry = DbEntry {
+			let mut main_entry = DbEntry {
 				id: (value.block_height as u64) << 32 | ext.metadata.ext_index as u64,
 				block_height: value.block_height,
 				block_hash: value.block_hash,
@@ -170,50 +196,84 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 			};
 
 			match ext.events(node.clone()).await {
-				Ok(events) => entry.ext_success = Some(events.is_extrinsic_success_present()),
+				Ok(events) => main_entry.ext_success = Some(events.is_extrinsic_success_present()),
 				_ => (),
 			}
 
 			if let Ok(send_message) = SendMessage::from_call(&ext.call) {
 				if failed_txs.contains(&ext.metadata.ext_index) {
 					warn!(
-						block_height = entry.block_height,
-						extrinsic_index = entry.ext_index,
+						block_height = main_entry.block_height,
+						extrinsic_index = main_entry.ext_index,
 						"✉️  Send Message found but skipped as it ext index is in failed txs list",
 					);
 					continue;
 				}
 
-				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "✉️  Send Message",);
+				info!(
+					block_height = main_entry.block_height,
+					extrinsic_index = main_entry.ext_index,
+					"✉️  Send Message",
+				);
 				let serialized_call = SerializeSendMessage::from(send_message);
+
+				let extra_entry = db::send_message_table::TableEntry {
+					id: main_entry.id,
+					kind: serialized_call.message.kind().to_string(),
+					amount: serialized_call.message.amount(),
+					to: serialized_call.to,
+				};
+
 				let serialized_call = match serde_json::to_string(&serialized_call) {
 					Ok(x) => x,
 					Err(err) => {
 						return Err(std::format!("Failed to serialize Send Message. Error: {}", err.to_string()));
 					},
 				};
-				entry.ext_call = serialized_call;
-				db_entries.push(entry);
+				main_entry.ext_call = serialized_call;
+				db_entries.push(main_entry);
+				send_message_entries.push(extra_entry);
+
 				continue;
 			}
 
 			if let Ok(execute) = Execute::from_call(&ext.call) {
-				info!(block_height = entry.block_height, extrinsic_index = entry.ext_index, "☠️  Execute",);
+				info!(block_height = main_entry.block_height, extrinsic_index = main_entry.ext_index, "☠️  Execute",);
 				let serialized_call = SerializeExecute::from(execute);
+
+				let extra_entry = db::execute_table::TableEntry {
+					id: main_entry.id,
+					kind: serialized_call.addr_message.message.kind().to_string(),
+					amount: serialized_call.addr_message.message.amount(),
+					to: serialized_call.addr_message.to,
+					slot: serialized_call.slot,
+					message_id: serialized_call.addr_message.id,
+				};
+
 				let serialized_call = match serde_json::to_string(&serialized_call) {
 					Ok(x) => x,
 					Err(err) => {
 						return Err(std::format!("Failed to serialize Execute. Error: {}", err.to_string()));
 					},
 				};
-				entry.ext_call = serialized_call;
-				db_entries.push(entry);
+				main_entry.ext_call = serialized_call;
+				db_entries.push(main_entry);
+				execute_entries.push(extra_entry);
+
 				continue;
 			}
 		}
 
 		for entry in db_entries {
 			db.insert(entry).await?;
+		}
+
+		for entry in execute_entries {
+			ExecuteTable::insert(entry, &db).await?;
+		}
+
+		for entry in send_message_entries {
+			SendMessageTable::insert(entry, &db).await?;
 		}
 	}
 }
@@ -262,11 +322,7 @@ async fn fetch_block_timestamp_and_failed_txs(
 	Ok((set_tx.call.now / 1000, failed_tx.call.failed_txs))
 }
 
-async fn get_block_height(
-	block_height: Option<u32>,
-	db: &indexer_db::Database,
-	node: &avail_rust::Client,
-) -> Result<u32, String> {
+async fn get_block_height(block_height: Option<u32>, db: &Database, node: &avail_rust::Client) -> Result<u32, String> {
 	if let Some(block_height) = block_height {
 		return Ok(block_height);
 	}
