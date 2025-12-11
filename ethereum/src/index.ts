@@ -45,6 +45,9 @@ ponder.on("AvailBridgeV1:MessageReceived", async ({ event, context }) => {
     amount: amount,
     eventType: "MessageReceived",
     status: STATUS.BRIDGED,
+    blockNumber: event.block.number,
+    sourceBlockHash: event.block.hash,
+    sourceTransactionHash: event.transaction.hash
   });
 });
 
@@ -86,6 +89,9 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
       eventType: "MessageSent",
       proof: bigIntAdjustedProof,
       status: STATUS.IN_PROGRESS,
+      blockNumber: event.block.number,
+      sourceBlockHash: event.block.hash,
+      sourceTransactionHash: event.transaction.hash
     })
     .onConflictDoUpdate((existing) => ({
       sender: event.args.from,
@@ -94,5 +100,8 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
       eventType: "MessageSent",
       proof: bigIntAdjustedProof,
       status: STATUS.IN_PROGRESS,
+      blockNumber: event.block.number,
+      sourceBlockHash: event.block.hash,
+      sourceTransactionHash: event.transaction.hash
     }));
 });

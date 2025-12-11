@@ -12,8 +12,10 @@ export const bridgeEvent = onchainTable(
     eventType: t.text().notNull(), // "MessageSent" or "MessageReceived"
     //proofs only for MessageSent
     proof: t.jsonb().$type<GetProofReturnType>(),
-    blockHash: t.hex(),
+    sourceBlockHash: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
     status: t.text().notNull().$type<STATUS>(),
+    sourceTransactionHash: t.hex().notNull(),
   }),
   (table) => ({
     pk: primaryKey({ columns: [table.messageId, table.eventType] }),
