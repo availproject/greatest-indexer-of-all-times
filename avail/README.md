@@ -73,5 +73,5 @@ cargo run
 - amount: TEXT (nullable)
 - to: TEXT NOT NULL
 - slot: BIGINT NOT NULL
-- message_id: BIGINT NOT NULL
+- message_id: NUMERIC(78) NOT NULL
 ```
