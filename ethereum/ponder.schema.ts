@@ -8,12 +8,12 @@ export const bridgeEvent = onchainTable(
     messageId: t.bigint().notNull(),
     sender: t.hex().notNull(),
     receiver: t.hex().notNull(),
-    amount: t.bigint().notNull(),
+    amount: t.text().notNull(),
     eventType: t.text().notNull(), // "MessageSent" or "MessageReceived"
     //proofs only for MessageSent
     proof: t.jsonb().$type<GetProofReturnType>(),
     sourceBlockHash: t.hex().notNull(),
-    blockNumber: t.bigint().notNull(),
+    blockNumber: t.integer().notNull(),
     status: t.text().notNull().$type<STATUS>(),
     sourceTransactionHash: t.hex().notNull(),
   }),

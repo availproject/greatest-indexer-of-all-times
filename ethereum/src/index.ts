@@ -42,12 +42,13 @@ ponder.on("AvailBridgeV1:MessageReceived", async ({ event, context }) => {
     sender: event.args.from,
     receiver: event.args.to,
     messageId: event.args.messageId,
-    amount: amount,
+    //for compatibility with the rust indexer, we need to store it as text (numeric(78) represenation of bigint vs native bigint)
+    amount: amount.toString(),
     eventType: "MessageReceived",
     status: STATUS.BRIDGED,
-    blockNumber: event.block.number,
+    blockNumber: Number(event.block.number),
     sourceBlockHash: event.block.hash,
-    sourceTransactionHash: event.transaction.hash
+    sourceTransactionHash: event.transaction.hash,
   });
 });
 
@@ -85,23 +86,23 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
       messageId: event.args.messageId,
       sender: event.args.from,
       receiver: event.args.to,
-      amount: decoded.args[1] as bigint,
+      amount: decoded.args[1] as string,
       eventType: "MessageSent",
       proof: bigIntAdjustedProof,
       status: STATUS.IN_PROGRESS,
-      blockNumber: event.block.number,
+      blockNumber: Number(event.block.number),
       sourceBlockHash: event.block.hash,
-      sourceTransactionHash: event.transaction.hash
+      sourceTransactionHash: event.transaction.hash,
     })
     .onConflictDoUpdate((existing) => ({
       sender: event.args.from,
       receiver: event.args.to,
-      amount: decoded.args[1] as bigint,
+      amount: decoded.args[1] as string,
       eventType: "MessageSent",
       proof: bigIntAdjustedProof,
       status: STATUS.IN_PROGRESS,
-      blockNumber: event.block.number,
+      blockNumber: Number(event.block.number),
       sourceBlockHash: event.block.hash,
-      sourceTransactionHash: event.transaction.hash
+      sourceTransactionHash: event.transaction.hash,
     }));
 });
