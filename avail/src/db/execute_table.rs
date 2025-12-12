@@ -13,7 +13,7 @@ impl ExecuteTable {
 					amount TEXT,
 					\"to\" TEXT NOT NULL,
 					slot BIGINT NOT NULL,
-					message_id BIGINT NOT NULL
+					message_id NUMERIC(78) NOT NULL
 				);
 			",
 			&db.execute_table_name,
