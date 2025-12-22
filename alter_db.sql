@@ -8,5 +8,3 @@ CREATE TYPE status AS ENUM (
 ALTER TABLE bridge_event
     ALTER COLUMN status TYPE status
         USING status::status;
-ALTER TABLE public.avail_indexer
-    ALTER COLUMN signature_address SET NOT NULL;
