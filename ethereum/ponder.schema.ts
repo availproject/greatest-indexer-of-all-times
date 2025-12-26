@@ -1,6 +1,13 @@
-import { onchainTable, primaryKey, uniqueIndex } from "ponder";
+import { onchainEnum, onchainTable, primaryKey } from "ponder";
 import { GetProofReturnType } from "viem";
 import { STATUS } from "./src/types";
+
+export const status = onchainEnum("status", [
+  STATUS.INITIATED,
+  STATUS.IN_PROGRESS,
+  STATUS.CLAIM_READY,
+  STATUS.BRIDGED,
+]);
 
 export const bridgeEvent = onchainTable(
   "bridge_event",
@@ -14,7 +21,7 @@ export const bridgeEvent = onchainTable(
     proof: t.jsonb().$type<GetProofReturnType>(),
     sourceBlockHash: t.hex().notNull(),
     blockNumber: t.integer().notNull(),
-    status: t.text().notNull().$type<STATUS>(),
+    status: status().notNull(),
     sourceTransactionHash: t.hex().notNull(),
   }),
   (table) => ({

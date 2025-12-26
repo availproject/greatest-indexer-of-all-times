@@ -1,5 +1,5 @@
 CREATE TYPE status AS ENUM (
-    'initiated'
+    'initiated',
     'bridged',
     'in_progress',
     'claim_ready'

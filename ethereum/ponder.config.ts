@@ -5,8 +5,8 @@ import { Hex } from "viem";
 
 export default createConfig({
   chains: {
-    mainnet: {
-      id: 1,
+    sepolia: {
+      id: 11155111,
       rpc: process.env.PONDER_RPC_URL_1,
     },
   },
@@ -16,12 +16,12 @@ export default createConfig({
   },
   contracts: {
     AvailBridgeV1: {
-      chain: "mainnet",
+      chain: "sepolia",
       abi: mergeAbis([BridgeImplAbi, BridgeProxyAbi]),
       address:
         (process.env.BRIDGE_PROXY_ETH as Hex) ||
-        "0x054fd961708D8E2B9c10a63F6157c74458889F0a",
-      startBlock: 23000000,
+        "0x967F7DdC4ec508462231849AE81eeaa68Ad01389",
+      startBlock: 9755073,
     },
   },
 });
