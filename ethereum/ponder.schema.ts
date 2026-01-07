@@ -12,7 +12,7 @@ export const status = onchainEnum("status", [
 export const bridgeEvent = onchainTable(
   "bridge_event",
   (t) => ({
-    messageId: t.bigint().notNull(),
+    messageId: t.int8({ mode: "bigint" }).notNull(),
     sender: t.hex().notNull(),
     receiver: t.hex().notNull(),
     amount: t.text().notNull(),
