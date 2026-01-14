@@ -17,9 +17,10 @@ use avail_rust::{
 	ext::const_hex,
 	subscription::EncodedExtrinsicSub,
 };
+use ethers_core::types::U256;
+use ethers_core::utils::format_units;
 use tracing::info;
 use tracing::{error as terror, warn};
-
 pub async fn run_indexer(config: Configuration) {
 	let mut restart_block_height: Option<u32> = None;
 
@@ -231,6 +232,12 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 					},
 				};
 				main_entry.ext_call = serialized_call;
+				info!(
+					"message" = "MessageSent",
+					"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
+					"from" = main_entry.signature_address,
+					"to" = extra_entry.to.to_string()
+				);
 				db_entries.push(main_entry);
 				send_message_entries.push(extra_entry);
 
@@ -257,9 +264,14 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 					},
 				};
 				main_entry.ext_call = serialized_call;
+				info!(
+					"message" = "MessageReceived",
+					"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
+					"from" = main_entry.signature_address,
+					"to" = extra_entry.to.to_string()
+				);
 				db_entries.push(main_entry);
 				execute_entries.push(extra_entry);
-
 				continue;
 			}
 		}
@@ -275,6 +287,17 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 		for entry in send_message_entries {
 			SendMessageTable::insert(entry, &db).await?;
 		}
+	}
+
+	pub fn parse_amount(mut amount: String) -> String {
+		parse_amount_with_decimals(amount.as_mut_str(), 18)
+	}
+
+	pub fn parse_amount_with_decimals(amount: &str, decimals: u32) -> String {
+		U256::from_dec_str(amount)
+			.ok()
+			.and_then(|v| format_units(v, decimals).ok())
+			.unwrap_or_default()
 	}
 }
 
