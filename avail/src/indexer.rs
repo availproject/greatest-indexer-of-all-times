@@ -232,12 +232,14 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 					},
 				};
 				main_entry.ext_call = serialized_call;
-				info!(
-					"message" = "MessageSent",
-					"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
-					"from" = main_entry.signature_address,
-					"to" = extra_entry.to.to_string()
-				);
+				if main_entry.ext_success {
+					info!(
+						"message" = "MessageSent",
+						"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
+						"from" = main_entry.signature_address,
+						"to" = extra_entry.to.to_string()
+					);
+				}
 				db_entries.push(main_entry);
 				send_message_entries.push(extra_entry);
 
@@ -264,12 +266,14 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 					},
 				};
 				main_entry.ext_call = serialized_call;
-				info!(
-					"message" = "MessageReceived",
-					"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
-					"from" = main_entry.signature_address,
-					"to" = extra_entry.to.to_string()
-				);
+				if main_entry.ext_success {
+					info!(
+						"message" = "MessageReceived",
+						"amount" = parse_amount(extra_entry.amount.unwrap_or(0).to_string()),
+						"from" = main_entry.signature_address,
+						"to" = extra_entry.to.to_string()
+					);
+				}
 				db_entries.push(main_entry);
 				execute_entries.push(extra_entry);
 				continue;
