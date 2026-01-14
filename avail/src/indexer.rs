@@ -155,6 +155,14 @@ async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) ->
 		.await
 		.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
 	let start_block_height = get_block_height(config.block_height, &db, &node).await?;
+	let latest_finalized_block_height = node.finalized().block_height().await.unwrap_or(0);
+	let diff = latest_finalized_block_height.saturating_sub(start_block_height);
+	info!(
+		start_block_height = start_block_height,
+		latest_finalized_block_height = latest_finalized_block_height,
+		diff = diff,
+		"Init Params"
+	);
 
 	// Here we define what extrinsics we will follow
 	let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
