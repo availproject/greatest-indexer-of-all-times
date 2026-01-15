@@ -12,17 +12,7 @@ import schema from "ponder:schema";
 import {BridgeImplAbi} from "../abis/BridgeImplAbi";
 import {DecodedResult, STATUS} from "./types";
 import {replaceBigInts} from "ponder";
-import {ethers} from "ethers";
-import { BigNumber } from "bignumber.js";
-
-function parseAmount(numberString: string): string {
-    try {
-        const number = BigNumber(numberString).toFixed();
-        return ethers.formatEther(number).toString();
-    } catch (e) {
-        return "";
-    }
-}
+import { formatEther } from 'viem'
 
 
 ponder.on("AvailBridgeV1:MessageReceived", async ({event, context}) => {
@@ -52,7 +42,7 @@ ponder.on("AvailBridgeV1:MessageReceived", async ({event, context}) => {
 
     console.log({
         type: "MessageReceived",
-        "amount": parseAmount(amount.toString()),
+        "amount": formatEther(amount),
         "from": event.args.from,
         "to": event.args.to
     });
@@ -102,7 +92,7 @@ ponder.on("AvailBridgeV1:MessageSent", async ({event, context}) => {
     let amount = decoded.args[1] as string;
     console.log({
         type: "MessageSent",
-        "amount": parseAmount(amount),
+        "amount": formatEther(BigInt(amount)),
         "from": event.args.from,
         "to": event.args.to
     });
