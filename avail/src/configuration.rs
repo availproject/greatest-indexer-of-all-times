@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, num::ParseIntError};
 use tracing::info;
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
@@ -9,6 +9,7 @@ pub struct ConfigurationFile {
 	pub send_message_table_name: Option<String>,
 	pub execute_table_name: Option<String>,
 	pub block_height: Option<u32>,
+	pub task_count: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,7 @@ pub struct Configuration {
 	pub send_message_table_name: String,
 	pub execute_table_name: String,
 	pub block_height: Option<u32>,
+	pub task_count: u32,
 }
 
 impl Configuration {
@@ -111,6 +113,17 @@ impl Configuration {
 			String::from("avail_execute_table")
 		};
 
+		let task_count: u32 = if let Ok(value) = env::var("TASK_COUNT") {
+			info!("TASK_COUNT from ENV");
+			value.parse().map_err(|e: ParseIntError| e.to_string())?
+		} else if let Some(value) = config_file.task_count {
+			info!("TASK_COUNT from FILE");
+			value
+		} else {
+			info!("Failed to read TASK_COUNT either from ENV or config file. Defaulting to 10");
+			10
+		};
+
 		Ok(Configuration {
 			db_url,
 			avail_url,
@@ -118,6 +131,7 @@ impl Configuration {
 			block_height,
 			send_message_table_name,
 			execute_table_name,
+			task_count,
 		})
 	}
 }

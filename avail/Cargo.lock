@@ -243,9 +243,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "avail-rust-client"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e220c1235278a8a2f3161addc8b510c586caacfde7dd7a1da1810452e2bf0add"
+checksum = "46069ba8315a805aa78fe55ef47b6eabe8196d36d8f3dece75aed9274c427d88"
 dependencies = [
  "avail-rust-core",
  "const-hex",

@@ -1,11 +1,10 @@
 mod configuration;
 mod db;
 mod indexer;
-
-use std::time::Duration;
+mod syncer;
 
 use tokio::runtime::Runtime;
-use tracing::{error as terror, info};
+use tracing::error as terror;
 use tracing_subscriber::util::SubscriberInitExt;
 
 fn main() {
@@ -33,21 +32,15 @@ fn main() {
 
 	runtime.block_on(async move {
 		let t1 = tokio::spawn(async { indexer::run_indexer(config).await });
-		let t2 = tokio::spawn(async { i_am_alive().await });
 
-		_ = t1.await;
-		_ = t2.await;
+		match t1.await {
+			Err(err) => terror!(error = err.to_string(), "Indexer returned an error. Indexer shutting down"),
+			_ => (),
+		}
 	});
 }
 
 fn setup_tracing() {
 	let builder = tracing_subscriber::fmt::SubscriberBuilder::default();
 	_ = builder.json().finish().try_init();
-}
-
-async fn i_am_alive() {
-	loop {
-		tokio::time::sleep(Duration::from_hours(1)).await;
-		info!("❤️  Indexer is still alive",);
-	}
 }

@@ -22,7 +22,8 @@ The indexer reads configuration from:
   "table_name": "avail_indexer",
   "send_message_table_name": "avail_indexer_send_message",
   "execute_table_name": "avail_indexer_execute",
-  "block_height": 1903463
+  "block_height": 1903463,
+  "task_count": 50
 }
 ```
 
@@ -38,6 +39,7 @@ TABLE_NAME=avail_indexer \
 SEND_MESSAGE_TABLE_NAME=avail_indexer_send_message \
 EXECUTE_TABLE_NAME=avail_indexer_execute \
 BLOCK_HEIGHT=1903463 \
+TASK_COUNT=50 \
 cargo run
 ```
 
