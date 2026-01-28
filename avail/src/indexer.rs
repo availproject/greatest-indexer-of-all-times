@@ -15,9 +15,9 @@ use avail_rust::{
 			types::{AddressedMessage, Message},
 		},
 	},
-	block::{BlockEncodedExtrinsicsQuery, BlockExtrinsic, extrinsic_options::Options},
+	block::{BlockEncodedExtrinsicsQuery, BlockEvents, BlockEventsQuery, BlockExtrinsic, extrinsic_options::Options},
 	ext::const_hex,
-	subscription::{EncodedExtrinsicSub, extrinsic::EncodedExtrinsicSubValue},
+	subscription::EncodedExtrinsicSub,
 };
 use tracing::info;
 use tracing::{error as terror, warn};
@@ -260,6 +260,9 @@ pub async fn convert_extrinsics_to_table_entries(
 	let mut send_message_entries: Vec<db::send_message_table::TableEntry> = Vec::with_capacity(list.len());
 	let mut execute_entries: Vec<db::execute_table::TableEntry> = Vec::with_capacity(list.len());
 
+	let mut events_query = BlockEventsQuery::new(node.clone(), block_hash);
+	events_query.set_retry_on_error(Some(false));
+
 	for ext in list {
 		let mut main_entry = DbEntry {
 			id: (block_height as u64) << 32 | ext.metadata.ext_index as u64,
@@ -275,9 +278,12 @@ pub async fn convert_extrinsics_to_table_entries(
 			ext_call: String::new(),
 		};
 
-		match ext.events(node.clone()).await {
-			Ok(events) => main_entry.ext_success = Some(events.is_extrinsic_success_present()),
-			_ => (),
+		let events = events_query
+			.extrinsic(ext.ext_index())
+			.await
+			.unwrap_or_else(|_| BlockEvents::new(Vec::new()));
+		if !events.is_empty() {
+			main_entry.ext_success = Some(events.is_extrinsic_success_present())
 		}
 
 		if let Ok(send_message) = SendMessage::from_call(&ext.call) {
@@ -285,6 +291,7 @@ pub async fn convert_extrinsics_to_table_entries(
 				warn!(
 					block_height = main_entry.block_height,
 					extrinsic_index = main_entry.ext_index,
+					skipped = true,
 					"✉️  Send Message found but skipped as it ext index is in failed txs list",
 				);
 				continue;

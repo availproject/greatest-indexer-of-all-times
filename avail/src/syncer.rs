@@ -10,7 +10,7 @@ use crate::{
 };
 
 const SLEEP_DURATION: Duration = Duration::from_secs(30);
-const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 5;
+const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 60;
 
 pub struct SyncStats {
 	pub total_indexed: u32,
@@ -123,7 +123,7 @@ impl Syncer {
 		// Create Task Params
 		let n = Instant::now();
 		let mut task_params = create_task_params(avail_url, self.task_count, filter.clone()).await?;
-		println!("Creating Task Params Time: {:?}", n.elapsed());
+		//println!("Creating Task Params Time: {:?}", n.elapsed());
 
 		self.stats.checkpoint = Instant::now();
 		loop {
@@ -178,14 +178,13 @@ impl Syncer {
 		let n = Instant::now();
 		spawn_tasks(handles, &task_params);
 		let spawn_time = n.elapsed();
-		info!("Spawend");
 
 		// Process Results
 		let n = Instant::now();
 		let processed_height = process_results(db, handles).await;
 		let process_time = n.elapsed();
 
-		info!(?spawn_time, ?process_time);
+		//info!(?spawn_time, ?process_time);
 
 		processed_height
 	}
@@ -244,7 +243,6 @@ fn spawn_tasks(handles: &mut Vec<JoinHandle<Result<TaskResult, String>>>, params
 async fn process_results(db: &Database, handles: &mut [JoinHandle<Result<TaskResult, String>>]) -> ProcessedHeight {
 	let mut processed_height = None;
 	for handle in handles {
-		info!("Waiting for await...");
 		let result = match handle.await {
 			Ok(x) => x,
 			Err(err) => {
@@ -257,7 +255,6 @@ async fn process_results(db: &Database, handles: &mut [JoinHandle<Result<TaskRes
 				return ProcessedHeight::new(processed_height, Some(err));
 			},
 		};
-		info!("Waiting to add to db...");
 		if let Err(error) = add_to_db(db, result.db_entries, result.execute_entries, result.send_message_entries).await
 		{
 			return ProcessedHeight::new(processed_height, Some(error));
@@ -271,7 +268,6 @@ async fn process_results(db: &Database, handles: &mut [JoinHandle<Result<TaskRes
 async fn task(params: TaskParams) -> Result<TaskResult, String> {
 	let TaskParams { node, filter, block_height } = params;
 	let block = avail_rust::block::encoded::BlockEncodedExtrinsicsQuery::new(node.clone(), block_height.into());
-	info!("Waiting for list..");
 	let list = block.all(filter).await.map_err(|e| e.to_string())?;
 
 	if list.is_empty() {
@@ -283,7 +279,6 @@ async fn task(params: TaskParams) -> Result<TaskResult, String> {
 		});
 	}
 
-	info!("Waiting for block hash..");
 	let block_hash = node
 		.chain()
 		.block_hash(Some(block_height))
@@ -291,9 +286,7 @@ async fn task(params: TaskParams) -> Result<TaskResult, String> {
 		.map_err(|e| e.to_string())?
 		.ok_or(std::format!("Failed to fetch block hash for block height: {}", block_height))?;
 
-	info!("Waiting to fetch timestamp and failed txs..");
 	let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), block_hash).await?;
-	info!("Waiting to Convert..");
 	let table_entries =
 		convert_extrinsics_to_table_entries(&node, list, block_height, block_hash, timestamp, failed_txs).await?;
 
