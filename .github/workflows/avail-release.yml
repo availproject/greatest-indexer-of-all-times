@@ -41,5 +41,9 @@ jobs:
           tags: |
             registry.digitalocean.com/availj/avail-indexer:${{ steps.version.outputs.version }}
             registry.digitalocean.com/availj/avail-indexer:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: |
+            type=gha,scope=avail-indexer
+            type=registry,ref=registry.digitalocean.com/availj/avail-indexer:buildcache
+          cache-to: |
+            type=gha,scope=avail-indexer,mode=max
+            type=registry,ref=registry.digitalocean.com/availj/avail-indexer:buildcache,mode=max
