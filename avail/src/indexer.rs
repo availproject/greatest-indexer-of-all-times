@@ -11,7 +11,7 @@ use avail_rust::{
 };
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
-use tracing::error as terror;
+use tracing::{error as terror, info};
 
 const SLEEP_DURATION: Duration = Duration::from_secs(30);
 
@@ -21,8 +21,8 @@ pub struct Indexer {
 	config: Configuration,
 	next_height_to_index: u32,
 	finalized_height: u32,
-	task_count: usize,
 	stats: IndexerStats,
+	filter: Options,
 }
 
 impl Indexer {
@@ -40,44 +40,71 @@ impl Indexer {
 		let node = avail_rust::Client::new(&config.avail_url)
 			.await
 			.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
-		let next_height_to_index = define_starting_height(config.block_height, &db, &node).await?;
+		let next_height_to_index = define_next_height_to_index(config.block_height, &db, &node).await?;
 		let finalized_height = node.finalized().block_height().await.map_err(|e| e.to_string())?;
 
+		// Here we define what extrinsics we will follow
+		let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
+		let filter = Options::default().filter(tracked_calls);
+
 		Ok(Self {
-			task_count: config.task_count as usize,
 			node,
 			db,
 			config,
 			next_height_to_index,
 			finalized_height,
 			stats: IndexerStats::new(),
+			filter,
 		})
 	}
 
 	pub async fn run(mut self) -> Result<(), String> {
-		// Here we define what extrinsics we will follow
-		let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
-		let filter = Options::default().filter(tracked_calls);
+		let max_task_count = self.config.max_task_count;
+
+		info!(
+			start_height = self.next_height_to_index,
+			finalized_height = self.finalized_height,
+			max_task_count,
+			"Indexer up and running."
+		);
+
+		// Calculate how many tasks do we need.
+		let blocks_to_index_count = self.blocks_to_index_count();
+		let task_count = blocks_to_index_count.min(max_task_count);
+		if task_count < max_task_count {
+			info!(
+				blocks_to_index_count,
+				task_count = task_count,
+				"Not that many blocks to index. Reduced max task count"
+			);
+		} else {
+			info!(
+				blocks_to_index_count,
+				task_count = max_task_count,
+				"We have many blocks to index. Using max task count"
+			);
+		}
 
 		// Handles
-		let mut handles = Vec::with_capacity(self.task_count);
+		let mut handles = Vec::with_capacity(task_count as usize);
 
+		info!(count = task_count, "Creating HTTP Node connections...");
 		// Create Task Params
-		let mut task_params = create_task_params(&self.config.avail_url, self.task_count, filter.clone()).await?;
+		let mut task_params =
+			create_task_params(&self.config.avail_url, task_count as usize, self.filter.clone()).await?;
 
+		info!("Main loop started");
 		self.stats.checkpoint = Instant::now();
 		loop {
 			self.sleep_if_ahead().await;
 
-			let processed_height = Self::process_n_blocks(
-				self.next_height_to_index,
-				self.finalized_height,
-				self.task_count as u32,
-				&self.db,
-				&mut task_params,
-				&mut handles,
-			)
-			.await;
+			if let Err(err) = self.update_task_count(&mut task_params).await {
+				terror!(error = err, "Failed to update task count. Sleeping and then retrying.");
+				tokio::time::sleep(SLEEP_DURATION).await;
+				continue;
+			}
+
+			let processed_height = self.process_n_blocks(&mut task_params, &mut handles).await;
 
 			if let Some(processed_height) = processed_height.height {
 				self.stats.total_indexed += processed_height
@@ -86,8 +113,11 @@ impl Indexer {
 				self.next_height_to_index = processed_height + 1;
 			}
 
-			self.stats
-				.maybe_display_stats(self.next_height_to_index.saturating_sub(1), self.finalized_height);
+			self.stats.maybe_display_stats(
+				self.next_height_to_index.saturating_sub(1),
+				self.finalized_height,
+				self.blocks_to_index_count(),
+			);
 
 			if let Some(err) = processed_height.error {
 				terror!(
@@ -100,48 +130,106 @@ impl Indexer {
 		}
 	}
 
+	async fn update_task_count(&self, task_params: &mut Vec<TaskParams>) -> Result<(), String> {
+		let expected_count = self.blocks_to_index_count().min(self.config.max_task_count) as usize;
+		let current_count = task_params.len();
+
+		if expected_count == current_count {
+			return Ok(());
+		}
+
+		if expected_count > current_count {
+			let diff = expected_count.saturating_sub(current_count);
+			for _ in 0..diff {
+				let node = Client::new(&self.config.avail_url).await.map_err(|e| e.to_string())?;
+				task_params.push(TaskParams::new(node, self.filter.clone()));
+			}
+
+			let new_task_count = task_params.len();
+			info!(previous_task_count = current_count, new_task_count, "Task count has increased");
+			return Ok(());
+		}
+
+		task_params.truncate(expected_count.max(1));
+		let new_task_count = task_params.len();
+		info!(previous_task_count = current_count, new_task_count, "Task count has decreased");
+
+		Ok(())
+	}
+
 	async fn process_n_blocks(
-		start_block_height: u32,
-		end_block_height: u32,
-		task_count: u32,
-		db: &Database,
+		&self,
 		task_params: &mut Vec<TaskParams>,
 		handles: &mut Vec<JoinHandle<Result<TaskResult, String>>>,
 	) -> ProcessedHeight {
 		// Update bock height of every task param
-		update_task_params(start_block_height, end_block_height, task_count, task_params);
+		update_task_params(self.next_height_to_index, task_params);
 		spawn_tasks(handles, &task_params);
-		process_results(db, handles).await
+		process_results(&self.db, handles).await
 	}
 
 	async fn sleep_if_ahead(&mut self) {
 		loop {
-			let is_ahead = self.next_height_to_index > self.finalized_height;
-			if !is_ahead {
+			if self.finalized_height >= self.next_height_to_index {
 				return;
 			}
 
-			// Nothing to do besides sleeping.
-			tokio::time::sleep(Duration::from_secs(5)).await;
 			self.finalized_height = self
 				.node
 				.finalized()
 				.block_height()
 				.await
 				.unwrap_or_else(|_| self.finalized_height);
+
+			if self.next_height_to_index > self.finalized_height {
+				// Nothing to do besides sleeping.
+				tokio::time::sleep(Duration::from_secs(60)).await;
+				continue;
+			}
 		}
+	}
+
+	fn blocks_to_index_count(&self) -> u32 {
+		self.finalized_height
+			.saturating_add(1)
+			.saturating_sub(self.next_height_to_index)
 	}
 }
 
-fn update_task_params(start_height: u32, end_height: u32, task_count: u32, task_params: &mut Vec<TaskParams>) {
-	let expected_length = end_height
-		.saturating_add(1)
-		.saturating_sub(start_height)
-		.min(task_count) as usize;
+#[derive(Clone)]
+pub struct TaskParams {
+	pub node: Client,
+	pub filter: Options,
+	pub block_height: u32,
+}
+
+impl TaskParams {
+	pub fn new(node: Client, filter: Options) -> Self {
+		Self { node, filter, block_height: 0 }
+	}
+}
+
+struct TaskResult {
+	pub db_data: DataForDatabase,
+	pub block_height: u32,
+}
+
+#[derive(Debug)]
+struct ProcessedHeight {
+	pub height: Option<u32>,
+	pub error: Option<String>,
+}
+
+impl ProcessedHeight {
+	pub fn new(height: Option<u32>, error: Option<String>) -> Self {
+		Self { height, error }
+	}
+}
+
+fn update_task_params(start_height: u32, task_params: &mut Vec<TaskParams>) {
 	for (i, param) in task_params.iter_mut().enumerate() {
 		param.block_height = start_height + i as u32;
 	}
-	task_params.truncate(expected_length);
 }
 
 async fn create_task_params(avail_url: &str, task_count: usize, filter: Options) -> Result<Vec<TaskParams>, String> {
@@ -213,7 +301,7 @@ async fn task(params: TaskParams) -> Result<TaskResult, String> {
 	Ok(TaskResult { db_data, block_height })
 }
 
-pub async fn define_starting_height(
+pub async fn define_next_height_to_index(
 	block_height: Option<u32>,
 	db: &Database,
 	node: &avail_rust::Client,
@@ -227,34 +315,4 @@ pub async fn define_starting_height(
 	}
 
 	node.finalized().block_height().await.map_err(|e| e.to_string())
-}
-
-#[derive(Clone)]
-pub struct TaskParams {
-	pub node: Client,
-	pub filter: Options,
-	pub block_height: u32,
-}
-
-impl TaskParams {
-	pub fn new(node: Client, filter: Options) -> Self {
-		Self { node, filter, block_height: 0 }
-	}
-}
-
-struct TaskResult {
-	pub db_data: DataForDatabase,
-	pub block_height: u32,
-}
-
-#[derive(Debug)]
-struct ProcessedHeight {
-	pub height: Option<u32>,
-	pub error: Option<String>,
-}
-
-impl ProcessedHeight {
-	pub fn new(height: Option<u32>, error: Option<String>) -> Self {
-		Self { height, error }
-	}
 }

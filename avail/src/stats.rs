@@ -1,7 +1,7 @@
 use std::time::Instant;
 use tracing::info;
 
-const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 60;
+const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 5;
 
 pub struct IndexerStats {
 	pub total_indexed: u32,
@@ -18,23 +18,25 @@ impl IndexerStats {
 		}
 	}
 
-	pub fn maybe_display_stats(&mut self, last_indexed_height: u32, final_height: u32) {
+	pub fn maybe_display_stats(&mut self, last_indexed_block: u32, finalized_block: u32, remaining_block_count: u32) {
 		if !(self.checkpoint.elapsed().as_secs() > DISPLAY_MESSAGE_INTERVAL_SECS) {
 			return;
 		}
 
 		let bps = self.bps();
+		let block_indexed_since_last_log_count = self.total_indexed - self.previously_indexed;
+		let block_indexed_count = self.total_indexed;
 		self.checkpoint = Instant::now();
 		self.previously_indexed = self.total_indexed;
 
-		let blocks_left_to_index = final_height.saturating_add(1).saturating_sub(last_indexed_height);
 		info!(
-			last_indexed_height,
-			final_height,
-			total_indexed = self.total_indexed,
-			blocks_left_to_index,
+			last_indexed_block,
+			remaining_block_count,
+			block_indexed_count,
+			finalized_block,
+			block_indexed_since_last_log_count,
 			bps,
-			"Indexing..."
+			"📊 Indexing Stats"
 		);
 	}
 
