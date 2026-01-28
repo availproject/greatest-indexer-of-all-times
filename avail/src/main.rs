@@ -2,7 +2,7 @@ mod common;
 mod configuration;
 mod db;
 mod indexer;
-mod syncer;
+mod stats;
 
 use crate::indexer::Indexer;
 use tokio::runtime::Runtime;
