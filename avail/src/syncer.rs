@@ -5,8 +5,8 @@ use tokio::task::JoinHandle;
 use tracing::{error as terror, info};
 
 use crate::{
-	db::{self, Database, DbEntry},
-	indexer::{add_to_db, convert_extrinsics_to_table_entries, fetch_block_timestamp_and_failed_txs},
+	common::{convert_extrinsics_to_table_entries, fetch_block_timestamp_and_failed_txs},
+	db::{DataForDatabase, Database},
 };
 
 const SLEEP_DURATION: Duration = Duration::from_secs(30);
@@ -15,7 +15,6 @@ const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 60;
 pub struct SyncStats {
 	pub total_indexed: u32,
 	pub previously_indexed: u32,
-	pub first_time: bool,
 	pub checkpoint: Instant,
 }
 
@@ -24,18 +23,16 @@ impl SyncStats {
 		Self {
 			total_indexed: 0,
 			previously_indexed: 0,
-			first_time: true,
 			checkpoint: Instant::now(),
 		}
 	}
 
 	pub fn maybe_display_stats(&mut self, last_indexed_height: u32, final_height: u32) {
-		if !((self.checkpoint.elapsed().as_secs() > DISPLAY_MESSAGE_INTERVAL_SECS) || self.first_time) {
+		if !(self.checkpoint.elapsed().as_secs() > DISPLAY_MESSAGE_INTERVAL_SECS) {
 			return;
 		}
 
 		let bps = self.bps();
-		self.first_time = false;
 		self.checkpoint = Instant::now();
 		self.previously_indexed = self.total_indexed;
 
@@ -76,9 +73,7 @@ impl TaskParams {
 }
 
 struct TaskResult {
-	db_entries: Vec<DbEntry>,
-	execute_entries: Vec<db::execute_table::TableEntry>,
-	send_message_entries: Vec<db::send_message_table::TableEntry>,
+	db_data: DataForDatabase,
 	block_height: u32,
 }
 
@@ -95,16 +90,16 @@ impl ProcessedHeight {
 }
 
 pub struct Syncer {
-	pub next_height_to_sync: u32,
+	pub next_height_to_index: u32,
 	pub finalized_height: u32,
 	pub task_count: usize,
 	pub stats: SyncStats,
 }
 
 impl Syncer {
-	pub fn new(next_height_to_sync: u32, finalized_height: u32, task_count: u32) -> Self {
+	pub fn new(next_height_to_index: u32, finalized_height: u32, task_count: u32) -> Self {
 		Self {
-			next_height_to_sync,
+			next_height_to_index,
 			finalized_height,
 			task_count: task_count.max(1) as usize,
 			stats: SyncStats::new(),
@@ -121,19 +116,14 @@ impl Syncer {
 		let mut handles = Vec::with_capacity(self.task_count);
 
 		// Create Task Params
-		let n = Instant::now();
 		let mut task_params = create_task_params(avail_url, self.task_count, filter.clone()).await?;
-		//println!("Creating Task Params Time: {:?}", n.elapsed());
 
 		self.stats.checkpoint = Instant::now();
 		loop {
-			if self.is_done(&node).await {
-				info!(last_synced_height = self.next_height_to_sync.saturating_sub(1), "Syncing done");
-				return Ok(self.next_height_to_sync);
-			}
+			self.sleep_if_ahead(&node).await;
 
 			let processed_height = Self::process_n_blocks(
-				self.next_height_to_sync,
+				self.next_height_to_index,
 				self.finalized_height,
 				self.task_count as u32,
 				db,
@@ -145,12 +135,12 @@ impl Syncer {
 			if let Some(processed_height) = processed_height.height {
 				self.stats.total_indexed += processed_height
 					.saturating_add(1)
-					.saturating_sub(self.next_height_to_sync);
-				self.next_height_to_sync = processed_height + 1;
+					.saturating_sub(self.next_height_to_index);
+				self.next_height_to_index = processed_height + 1;
 			}
 
 			self.stats
-				.maybe_display_stats(self.next_height_to_sync.saturating_sub(1), self.finalized_height);
+				.maybe_display_stats(self.next_height_to_index.saturating_sub(1), self.finalized_height);
 
 			if let Some(err) = processed_height.error {
 				terror!(
@@ -173,38 +163,25 @@ impl Syncer {
 	) -> ProcessedHeight {
 		// Update bock height of every task param
 		update_task_params(start_block_height, end_block_height, task_count, task_params);
-
-		// Create tasks
-		let n = Instant::now();
 		spawn_tasks(handles, &task_params);
-		let spawn_time = n.elapsed();
-
-		// Process Results
-		let n = Instant::now();
-		let processed_height = process_results(db, handles).await;
-		let process_time = n.elapsed();
-
-		//info!(?spawn_time, ?process_time);
-
-		processed_height
+		process_results(db, handles).await
 	}
 
-	async fn is_done(&mut self, node: &Client) -> bool {
-		const THRESHOLD: u32 = 10;
+	async fn sleep_if_ahead(&mut self, node: &Client) {
+		loop {
+			let is_ahead = self.next_height_to_index > self.finalized_height;
+			if !is_ahead {
+				return;
+			}
 
-		if self.finalized_height.saturating_sub(self.next_height_to_sync) <= THRESHOLD {
+			// Nothing to do besides sleeping.
+			tokio::time::sleep(Duration::from_secs(5)).await;
 			self.finalized_height = node
 				.finalized()
 				.block_height()
 				.await
 				.unwrap_or_else(|_| self.finalized_height);
-
-			if self.finalized_height.saturating_sub(self.next_height_to_sync) <= THRESHOLD {
-				return true;
-			}
 		}
-
-		return false;
 	}
 }
 
@@ -255,8 +232,8 @@ async fn process_results(db: &Database, handles: &mut [JoinHandle<Result<TaskRes
 				return ProcessedHeight::new(processed_height, Some(err));
 			},
 		};
-		if let Err(error) = add_to_db(db, result.db_entries, result.execute_entries, result.send_message_entries).await
-		{
+
+		if let Err(error) = db.insert(result.db_data).await {
 			return ProcessedHeight::new(processed_height, Some(error));
 		}
 		processed_height = Some(result.block_height);
@@ -271,12 +248,7 @@ async fn task(params: TaskParams) -> Result<TaskResult, String> {
 	let list = block.all(filter).await.map_err(|e| e.to_string())?;
 
 	if list.is_empty() {
-		return Ok(TaskResult {
-			db_entries: Vec::new(),
-			execute_entries: Vec::new(),
-			send_message_entries: Vec::new(),
-			block_height,
-		});
+		return Ok(TaskResult { db_data: Default::default(), block_height });
 	}
 
 	let block_hash = node
@@ -287,13 +259,8 @@ async fn task(params: TaskParams) -> Result<TaskResult, String> {
 		.ok_or(std::format!("Failed to fetch block hash for block height: {}", block_height))?;
 
 	let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), block_hash).await?;
-	let table_entries =
+	let db_data =
 		convert_extrinsics_to_table_entries(&node, list, block_height, block_hash, timestamp, failed_txs).await?;
 
-	Ok(TaskResult {
-		db_entries: table_entries.0,
-		execute_entries: table_entries.1,
-		send_message_entries: table_entries.2,
-		block_height,
-	})
+	Ok(TaskResult { db_data, block_height })
 }

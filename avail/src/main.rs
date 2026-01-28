@@ -1,8 +1,10 @@
+mod common;
 mod configuration;
 mod db;
 mod indexer;
 mod syncer;
 
+use crate::indexer::Indexer;
 use tokio::runtime::Runtime;
 use tracing::error as terror;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -31,7 +33,10 @@ fn main() {
 	};
 
 	runtime.block_on(async move {
-		let t1 = tokio::spawn(async { indexer::run_indexer(config).await });
+		let t1 = tokio::spawn(async {
+			let indexer = Indexer::new(config).await.unwrap();
+			indexer.run().await
+		});
 
 		match t1.await {
 			Err(err) => terror!(error = err.to_string(), "Indexer returned an error. Indexer shutting down"),
