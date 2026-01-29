@@ -1,25 +1,25 @@
 use std::time::Instant;
 use tracing::info;
 
-const DISPLAY_MESSAGE_INTERVAL_SECS: u64 = 5;
-
 pub struct IndexerStats {
 	pub total_indexed: u32,
 	pub previously_indexed: u32,
 	pub checkpoint: Instant,
+	pub log_interval_ms: u128,
 }
 
 impl IndexerStats {
-	pub fn new() -> Self {
+	pub fn new(log_interval_ms: u32) -> Self {
 		Self {
 			total_indexed: 0,
 			previously_indexed: 0,
 			checkpoint: Instant::now(),
+			log_interval_ms: log_interval_ms as u128,
 		}
 	}
 
 	pub fn maybe_display_stats(&mut self, last_indexed_block: u32, finalized_block: u32, remaining_block_count: u32) {
-		if !(self.checkpoint.elapsed().as_secs() > DISPLAY_MESSAGE_INTERVAL_SECS) {
+		if !(self.checkpoint.elapsed().as_millis() > self.log_interval_ms) {
 			return;
 		}
 

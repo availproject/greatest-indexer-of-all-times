@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tracing::{error as terror, info};
 
-const SLEEP_DURATION: Duration = Duration::from_secs(30);
+const SLEEP_DURATION_ON_ERROR: Duration = Duration::from_secs(30);
 
 pub struct Indexer {
 	node: Client,
@@ -48,12 +48,12 @@ impl Indexer {
 		let filter = Options::default().filter(tracked_calls);
 
 		Ok(Self {
+			stats: IndexerStats::new(config.log_interval_ms),
 			node,
 			db,
 			config,
 			next_height_to_index,
 			finalized_height,
-			stats: IndexerStats::new(),
 			filter,
 		})
 	}
@@ -100,7 +100,7 @@ impl Indexer {
 
 			if let Err(err) = self.update_task_count(&mut task_params).await {
 				terror!(error = err, "Failed to update task count. Sleeping and then retrying.");
-				tokio::time::sleep(SLEEP_DURATION).await;
+				tokio::time::sleep(SLEEP_DURATION_ON_ERROR).await;
 				continue;
 			}
 
@@ -122,10 +122,10 @@ impl Indexer {
 			if let Some(err) = processed_height.error {
 				terror!(
 					error = err,
-					sleep_duration_secs = SLEEP_DURATION.as_secs(),
+					sleep_duration_secs = SLEEP_DURATION_ON_ERROR.as_secs(),
 					"Failed to sync some of of the blocks. Sleeping and then retrying."
 				);
-				tokio::time::sleep(SLEEP_DURATION).await;
+				tokio::time::sleep(SLEEP_DURATION_ON_ERROR).await;
 			}
 		}
 	}

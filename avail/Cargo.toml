@@ -1,6 +1,6 @@
 [package]
 name = "new-bridge-indexer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -11,3 +11,6 @@ tracing = { version = "0.1", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "json"] }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false }
+
+# Internal tools
+internal-utils = { git = "https://github.com/availproject/engineering-toolkit", default-features = false, branch = "main", features = ["otel"] }
