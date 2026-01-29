@@ -85,17 +85,24 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
     blockNumber: event.block.number,
   });
 
-  const decoded = decodeFunctionData({
-    abi: BridgeImplAbi,
-    data: tx.input,
-  });
-
   //no choice but to typecast since jsonb does not support bigint natively
   const bigIntAdjustedProof = replaceBigInts(proof, (v) =>
     String(v),
   ) as unknown as GetProofReturnType;
 
-  let amount = decoded.args[1] as string;
+  let amount: string;
+  try {
+    const decoded = decodeFunctionData({
+      abi: BridgeImplAbi,
+      data: tx.input,
+    });
+    amount = String(decoded.args[1] ?? tx.value);
+  } catch {
+    amount = String(tx.value);
+    console.log(
+      `Could not decode function data for tx ${tx.hash}, using tx.value as amount`,
+    );
+  }
   console.log({
     type: "MessageSent",
     amount: amount,
@@ -120,7 +127,7 @@ ponder.on("AvailBridgeV1:MessageSent", async ({ event, context }) => {
     .onConflictDoUpdate((existing) => ({
       sender: event.args.from,
       receiver: event.args.to,
-      amount: decoded.args[1] as string,
+      amount: amount,
       eventType: "MessageSent",
       proof: bigIntAdjustedProof,
       status: STATUS.IN_PROGRESS,
