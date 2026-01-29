@@ -1,336 +1,311 @@
-use std::time::Duration;
-
 use crate::{
+	common::{convert_extrinsics_to_table_entries, fetch_block_timestamp_and_failed_txs},
 	configuration::Configuration,
-	db::{self, Database, DbEntry, execute_table::ExecuteTable, send_message_table::SendMessageTable},
+	db::{DataForDatabase, Database},
+	stats::IndexerStats,
 };
 use avail_rust::{
-	ExtrinsicDecodable, H256, HasHeader,
-	avail::{
-		timestamp::tx::Set,
-		vector::{
-			tx::{Execute, FailedSendMessageTxs, SendMessage},
-			types::{AddressedMessage, Message},
-		},
-	},
-	block::{BlockEncodedExtrinsicsQuery, BlockExtrinsic, extrinsic_options::Options},
-	ext::const_hex,
-	subscription::EncodedExtrinsicSub,
+	Client, HasHeader,
+	avail::vector::tx::{Execute, SendMessage},
+	block::extrinsic_options::Options,
 };
-use tracing::info;
-use tracing::{error as terror, warn};
+use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
+use tracing::{error as terror, info};
 
-pub async fn run_indexer(config: Configuration) {
-	let mut restart_block_height: Option<u32> = None;
+const SLEEP_DURATION_ON_ERROR: Duration = Duration::from_secs(30);
 
-	loop {
-		let result = task(&config, &mut restart_block_height).await;
-		if let Err(err) = result {
-			terror!(error = err, "Indexer returned an error. Restarting indexer in 30 seconds.");
-			tokio::time::sleep(Duration::from_secs(30)).await;
-			continue;
-		}
-
-		warn!("Indexer finished. Exiting.");
-
-		return;
-	}
+pub struct Indexer {
+	node: Client,
+	db: Database,
+	config: Configuration,
+	next_height_to_index: u32,
+	finalized_height: u32,
+	stats: IndexerStats,
+	filter: Options,
 }
 
-/// Possible types of Messages allowed by Avail to bridge to other chains.
-#[derive(Debug, Clone, serde::Serialize)]
-#[repr(u8)]
-pub enum SerializedMessage {
-	ArbitraryMessage(String) = 0,
-	FungibleToken { asset_id: H256, amount: u128 } = 1,
-}
-
-impl From<Message> for SerializedMessage {
-	fn from(value: Message) -> Self {
-		match value {
-			Message::ArbitraryMessage(items) => Self::ArbitraryMessage(const_hex::encode_prefixed(items)),
-			Message::FungibleToken { asset_id, amount } => Self::FungibleToken { asset_id, amount },
-		}
-	}
-}
-
-impl SerializedMessage {
-	pub fn kind(&self) -> &str {
-		match self {
-			SerializedMessage::ArbitraryMessage(_) => "ArbitraryMessage",
-			SerializedMessage::FungibleToken { asset_id: _, amount: _ } => "FungibleToken",
-		}
-	}
-
-	pub fn amount(&self) -> Option<u128> {
-		match self {
-			SerializedMessage::ArbitraryMessage(_) => None,
-			SerializedMessage::FungibleToken { asset_id: _, amount } => Some(amount.clone()),
-		}
-	}
-}
-
-/// Message type used to bridge between Avail & other chains
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SerializedAddressedMessage {
-	pub message: SerializedMessage,
-	pub from: H256,
-	pub to: H256,
-	pub origin_domain: u32,
-	pub destination_domain: u32,
-	pub id: u64,
-}
-
-impl From<AddressedMessage> for SerializedAddressedMessage {
-	fn from(value: AddressedMessage) -> Self {
-		Self {
-			message: value.message.into(),
-			from: value.from,
-			to: value.to,
-			origin_domain: value.origin_domain,
-			destination_domain: value.destination_domain,
-			id: value.id,
-		}
-	}
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SerializeSendMessage {
-	pub message: SerializedMessage,
-	pub to: H256,
-	pub domain: u32,
-}
-
-impl From<SendMessage> for SerializeSendMessage {
-	fn from(value: SendMessage) -> Self {
-		Self {
-			message: value.message.into(),
-			to: value.to,
-			domain: value.domain,
-		}
-	}
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SerializeExecute {
-	pub slot: u64,
-	pub addr_message: SerializedAddressedMessage,
-	pub account_proof: Vec<String>,
-	pub storage_proof: Vec<String>,
-}
-
-impl From<Execute> for SerializeExecute {
-	fn from(value: Execute) -> Self {
-		Self {
-			slot: value.slot,
-			addr_message: value.addr_message.into(),
-			account_proof: value
-				.account_proof
-				.into_iter()
-				.map(|x| const_hex::encode_prefixed(x))
-				.collect(),
-			storage_proof: value
-				.storage_proof
-				.into_iter()
-				.map(|x| const_hex::encode_prefixed(x))
-				.collect(),
-		}
-	}
-}
-
-async fn task(config: &Configuration, restart_block_height: &mut Option<u32>) -> Result<(), String> {
-	let db = Database::new(
-		&config.db_url,
-		config.table_name.clone(),
-		config.send_message_table_name.clone(),
-		config.execute_table_name.clone(),
-	)
-	.await
-	.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
-	db.create_table().await?;
-	ExecuteTable::create_table(&db).await?;
-	SendMessageTable::create_table(&db).await?;
-
-	let node = avail_rust::Client::new(&config.avail_url)
+impl Indexer {
+	/// Creates DB and Node instance. Calculates start height.
+	pub async fn new(config: Configuration) -> Result<Self, String> {
+		let db = Database::new(
+			&config.db_url,
+			config.table_name.clone(),
+			config.send_message_table_name.clone(),
+			config.execute_table_name.clone(),
+		)
 		.await
-		.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
-	let start_block_height = get_block_height(config.block_height, &db, &node).await?;
-	let latest_finalized_block_height = node.finalized().block_height().await.unwrap_or(0);
-	let diff = latest_finalized_block_height.saturating_sub(start_block_height);
-	info!(
-		start_block_height = start_block_height,
-		latest_finalized_block_height = latest_finalized_block_height,
-		diff = diff,
-		"Init Params"
-	);
+		.map_err(|e| std::format!("Failed to establish a connection with db. Reason: {}", e))?;
 
-	// Here we define what extrinsics we will follow
-	let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
+		let node = avail_rust::Client::new(&config.avail_url)
+			.await
+			.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
+		let next_height_to_index = define_next_height_to_index(config.block_height, &db, &node).await?;
+		let finalized_height = node.finalized().block_height().await.map_err(|e| e.to_string())?;
 
-	// Create a subscription
-	let opts = Options::default().filter(tracked_calls);
-	let mut ext_sub = EncodedExtrinsicSub::new(node.clone(), opts);
-	ext_sub.set_block_height(start_block_height);
+		// Here we define what extrinsics we will follow
+		let tracked_calls: Vec<(u8, u8)> = vec![SendMessage::HEADER_INDEX, Execute::HEADER_INDEX];
+		let filter = Options::default().filter(tracked_calls);
 
-	// Run subscription
-	loop {
-		let value = match ext_sub.next().await {
+		Ok(Self {
+			stats: IndexerStats::new(config.log_interval_ms),
+			node,
+			db,
+			config,
+			next_height_to_index,
+			finalized_height,
+			filter,
+		})
+	}
+
+	pub async fn run(mut self) -> Result<(), String> {
+		let max_task_count = self.config.max_task_count;
+
+		info!(
+			start_height = self.next_height_to_index,
+			finalized_height = self.finalized_height,
+			max_task_count,
+			"Indexer up and running."
+		);
+
+		// Calculate how many tasks do we need.
+		let blocks_to_index_count = self.blocks_to_index_count();
+		let task_count = blocks_to_index_count.min(max_task_count);
+		if task_count < max_task_count {
+			info!(
+				blocks_to_index_count,
+				task_count = task_count,
+				"Not that many blocks to index. Reduced max task count"
+			);
+		} else {
+			info!(
+				blocks_to_index_count,
+				task_count = max_task_count,
+				"We have many blocks to index. Using max task count"
+			);
+		}
+
+		// Handles
+		let mut handles = Vec::with_capacity(task_count as usize);
+
+		info!(count = task_count, "Creating HTTP Node connections...");
+		// Create Task Params
+		let mut task_params =
+			create_task_params(&self.config.avail_url, task_count as usize, self.filter.clone()).await?;
+
+		info!("Main loop started");
+		self.stats.checkpoint = Instant::now();
+		loop {
+			self.sleep_if_ahead().await;
+
+			if let Err(err) = self.update_task_count(&mut task_params).await {
+				terror!(error = err, "Failed to update task count. Sleeping and then retrying.");
+				tokio::time::sleep(SLEEP_DURATION_ON_ERROR).await;
+				continue;
+			}
+
+			let processed_height = self.process_n_blocks(&mut task_params, &mut handles).await;
+
+			if let Some(processed_height) = processed_height.height {
+				self.stats.total_indexed += processed_height
+					.saturating_add(1)
+					.saturating_sub(self.next_height_to_index);
+				self.next_height_to_index = processed_height + 1;
+			}
+
+			self.stats.maybe_display_stats(
+				self.next_height_to_index.saturating_sub(1),
+				self.finalized_height,
+				self.blocks_to_index_count(),
+			);
+
+			if let Some(err) = processed_height.error {
+				terror!(
+					error = err,
+					sleep_duration_secs = SLEEP_DURATION_ON_ERROR.as_secs(),
+					"Failed to sync some of of the blocks. Sleeping and then retrying."
+				);
+				tokio::time::sleep(SLEEP_DURATION_ON_ERROR).await;
+			}
+		}
+	}
+
+	async fn update_task_count(&self, task_params: &mut Vec<TaskParams>) -> Result<(), String> {
+		let expected_count = self.blocks_to_index_count().min(self.config.max_task_count) as usize;
+		let current_count = task_params.len();
+
+		if expected_count == current_count {
+			return Ok(());
+		}
+
+		if expected_count > current_count {
+			let diff = expected_count.saturating_sub(current_count);
+			for _ in 0..diff {
+				let node = Client::new(&self.config.avail_url).await.map_err(|e| e.to_string())?;
+				task_params.push(TaskParams::new(node, self.filter.clone()));
+			}
+
+			let new_task_count = task_params.len();
+			info!(previous_task_count = current_count, new_task_count, "Task count has increased");
+			return Ok(());
+		}
+
+		task_params.truncate(expected_count.max(1));
+		let new_task_count = task_params.len();
+		info!(previous_task_count = current_count, new_task_count, "Task count has decreased");
+
+		Ok(())
+	}
+
+	async fn process_n_blocks(
+		&self,
+		task_params: &mut Vec<TaskParams>,
+		handles: &mut Vec<JoinHandle<Result<TaskResult, String>>>,
+	) -> ProcessedHeight {
+		// Update bock height of every task param
+		update_task_params(self.next_height_to_index, task_params);
+		spawn_tasks(handles, &task_params);
+		process_results(&self.db, handles).await
+	}
+
+	async fn sleep_if_ahead(&mut self) {
+		loop {
+			if self.finalized_height >= self.next_height_to_index {
+				return;
+			}
+
+			self.finalized_height = self
+				.node
+				.finalized()
+				.block_height()
+				.await
+				.unwrap_or_else(|_| self.finalized_height);
+
+			if self.next_height_to_index > self.finalized_height {
+				// Nothing to do besides sleeping.
+				tokio::time::sleep(Duration::from_secs(60)).await;
+				continue;
+			}
+		}
+	}
+
+	fn blocks_to_index_count(&self) -> u32 {
+		self.finalized_height
+			.saturating_add(1)
+			.saturating_sub(self.next_height_to_index)
+	}
+}
+
+#[derive(Clone)]
+pub struct TaskParams {
+	pub node: Client,
+	pub filter: Options,
+	pub block_height: u32,
+}
+
+impl TaskParams {
+	pub fn new(node: Client, filter: Options) -> Self {
+		Self { node, filter, block_height: 0 }
+	}
+}
+
+struct TaskResult {
+	pub db_data: DataForDatabase,
+	pub block_height: u32,
+}
+
+#[derive(Debug)]
+struct ProcessedHeight {
+	pub height: Option<u32>,
+	pub error: Option<String>,
+}
+
+impl ProcessedHeight {
+	pub fn new(height: Option<u32>, error: Option<String>) -> Self {
+		Self { height, error }
+	}
+}
+
+fn update_task_params(start_height: u32, task_params: &mut Vec<TaskParams>) {
+	for (i, param) in task_params.iter_mut().enumerate() {
+		param.block_height = start_height + i as u32;
+	}
+}
+
+async fn create_task_params(avail_url: &str, task_count: usize, filter: Options) -> Result<Vec<TaskParams>, String> {
+	let mut task_params: Vec<TaskParams> = Vec::with_capacity(task_count);
+	for _ in 0..task_count {
+		let node = Client::new(avail_url)
+			.await
+			.map_err(|e| std::format!("Failed to establish a connection with avail node. Reason: {}", e.to_string()))?;
+		task_params.push(TaskParams::new(node, filter.clone()));
+	}
+
+	Ok(task_params)
+}
+
+fn spawn_tasks(handles: &mut Vec<JoinHandle<Result<TaskResult, String>>>, params: &[TaskParams]) {
+	handles.clear();
+	for param in params.iter() {
+		let params = param.clone();
+		let handle = tokio::spawn(async move { task(params).await });
+		handles.push(handle);
+	}
+}
+
+async fn process_results(db: &Database, handles: &mut [JoinHandle<Result<TaskResult, String>>]) -> ProcessedHeight {
+	let mut processed_height = None;
+	for handle in handles {
+		let result = match handle.await {
 			Ok(x) => x,
 			Err(err) => {
-				return Err(std::format!("Failed to fetch extrinsics from subscription. Error: {}", err.to_string()));
+				return ProcessedHeight::new(processed_height, Some(err.to_string()));
 			},
 		};
-		*restart_block_height = Some(value.block_height);
+		let result = match result {
+			Ok(x) => x,
+			Err(err) => {
+				return ProcessedHeight::new(processed_height, Some(err));
+			},
+		};
 
-		let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), value.block_hash).await?;
-
-		let mut db_entries: Vec<DbEntry> = Vec::with_capacity(value.list.len());
-		let mut send_message_entries: Vec<db::send_message_table::TableEntry> = Vec::with_capacity(value.list.len());
-		let mut execute_entries: Vec<db::execute_table::TableEntry> = Vec::with_capacity(value.list.len());
-
-		for ext in value.list {
-			let mut main_entry = DbEntry {
-				id: (value.block_height as u64) << 32 | ext.metadata.ext_index as u64,
-				block_height: value.block_height,
-				block_hash: value.block_hash,
-				block_timestamp: timestamp,
-				ext_index: ext.metadata.ext_index,
-				ext_hash: ext.metadata.ext_hash,
-				signature_address: ext.ss58_address(),
-				pallet_id: ext.metadata.pallet_id,
-				variant_id: ext.metadata.variant_id,
-				ext_success: None,
-				ext_call: String::new(),
-			};
-
-			match ext.events(node.clone()).await {
-				Ok(events) => main_entry.ext_success = Some(events.is_extrinsic_success_present()),
-				_ => (),
-			}
-
-			if let Ok(send_message) = SendMessage::from_call(&ext.call) {
-				if failed_txs.contains(&ext.metadata.ext_index) {
-					warn!(
-						block_height = main_entry.block_height,
-						extrinsic_index = main_entry.ext_index,
-						"✉️  Send Message found but skipped as it ext index is in failed txs list",
-					);
-					continue;
-				}
-
-				info!(
-					block_height = main_entry.block_height,
-					extrinsic_index = main_entry.ext_index,
-					"✉️  Send Message",
-				);
-				let serialized_call = SerializeSendMessage::from(send_message);
-
-				let extra_entry = db::send_message_table::TableEntry {
-					id: main_entry.id,
-					kind: serialized_call.message.kind().to_string(),
-					amount: serialized_call.message.amount(),
-					to: serialized_call.to,
-				};
-
-				let serialized_call = match serde_json::to_string(&serialized_call) {
-					Ok(x) => x,
-					Err(err) => {
-						return Err(std::format!("Failed to serialize Send Message. Error: {}", err.to_string()));
-					},
-				};
-				main_entry.ext_call = serialized_call;
-				db_entries.push(main_entry);
-				send_message_entries.push(extra_entry);
-
-				continue;
-			}
-
-			if let Ok(execute) = Execute::from_call(&ext.call) {
-				info!(block_height = main_entry.block_height, extrinsic_index = main_entry.ext_index, "☠️  Execute",);
-				let serialized_call = SerializeExecute::from(execute);
-
-				let extra_entry = db::execute_table::TableEntry {
-					id: main_entry.id,
-					kind: serialized_call.addr_message.message.kind().to_string(),
-					amount: serialized_call.addr_message.message.amount(),
-					to: serialized_call.addr_message.to,
-					slot: serialized_call.slot,
-					message_id: serialized_call.addr_message.id,
-				};
-
-				let serialized_call = match serde_json::to_string(&serialized_call) {
-					Ok(x) => x,
-					Err(err) => {
-						return Err(std::format!("Failed to serialize Execute. Error: {}", err.to_string()));
-					},
-				};
-				main_entry.ext_call = serialized_call;
-				db_entries.push(main_entry);
-				execute_entries.push(extra_entry);
-
-				continue;
-			}
+		if let Err(error) = db.insert(result.db_data).await {
+			return ProcessedHeight::new(processed_height, Some(error));
 		}
-
-		for entry in db_entries {
-			db.insert(entry).await?;
-		}
-
-		for entry in execute_entries {
-			ExecuteTable::insert(entry, &db).await?;
-		}
-
-		for entry in send_message_entries {
-			SendMessageTable::insert(entry, &db).await?;
-		}
+		processed_height = Some(result.block_height);
 	}
+
+	ProcessedHeight::new(processed_height, None)
 }
 
-async fn fetch_block_timestamp_and_failed_txs(
-	node: avail_rust::Client,
-	block_hash: H256,
-) -> Result<(u64, Vec<u32>), String> {
-	let tracked_calls: Vec<(u8, u8)> = vec![Set::HEADER_INDEX, FailedSendMessageTxs::HEADER_INDEX];
+async fn task(params: TaskParams) -> Result<TaskResult, String> {
+	let TaskParams { node, filter, block_height } = params;
+	let block = avail_rust::block::encoded::BlockEncodedExtrinsicsQuery::new(node.clone(), block_height.into());
+	let list = block.all(filter).await.map_err(|e| e.to_string())?;
 
-	let query = BlockEncodedExtrinsicsQuery::new(node, block_hash.into());
-	let opts = Options::default().filter(tracked_calls);
-	let raw_exts = query.all(opts).await.map_err(|e| {
-		std::format!("Failed to fetch block timestamp and failed txs extrinsics. Error: {}", e.to_string())
-	})?;
+	if list.is_empty() {
+		return Ok(TaskResult { db_data: Default::default(), block_height });
+	}
 
-	let set_tx = raw_exts
-		.iter()
-		.find(|x| (x.metadata.pallet_id, x.metadata.variant_id) == Set::HEADER_INDEX);
-	let Some(set_tx) = set_tx else {
-		return Err(std::format!("Failed to fetch and find Timestamp::Set extrinsic"));
-	};
-	let set_tx = match BlockExtrinsic::<Set>::try_from(set_tx) {
-		Ok(x) => x,
-		Err(err) => {
-			return Err(std::format!("Failed convert raw Timestamp::Set to normal extrinsic. Reason: {}", err));
-		},
-	};
+	let block_hash = node
+		.chain()
+		.block_hash(Some(block_height))
+		.await
+		.map_err(|e| e.to_string())?
+		.ok_or(std::format!("Failed to fetch block hash for block height: {}", block_height))?;
 
-	let failed_tx = raw_exts
-		.iter()
-		.find(|x| (x.metadata.pallet_id, x.metadata.variant_id) == FailedSendMessageTxs::HEADER_INDEX);
-	let Some(failed_tx) = failed_tx else {
-		return Err(std::format!("Failed to fetch and find Vector::FailedSendMessageTxs extrinsic"));
-	};
-	let failed_tx = match BlockExtrinsic::<FailedSendMessageTxs>::try_from(failed_tx) {
-		Ok(x) => x,
-		Err(err) => {
-			return Err(std::format!(
-				"Failed convert raw Vector::FailedSendMessageTxs to normal extrinsic. Reason: {}",
-				err
-			));
-		},
-	};
+	let (timestamp, failed_txs) = fetch_block_timestamp_and_failed_txs(node.clone(), block_hash).await?;
+	let db_data =
+		convert_extrinsics_to_table_entries(&node, list, block_height, block_hash, timestamp, failed_txs).await?;
 
-	Ok((set_tx.call.now / 1000, failed_tx.call.failed_txs))
+	Ok(TaskResult { db_data, block_height })
 }
 
-async fn get_block_height(block_height: Option<u32>, db: &Database, node: &avail_rust::Client) -> Result<u32, String> {
+pub async fn define_next_height_to_index(
+	block_height: Option<u32>,
+	db: &Database,
+	node: &avail_rust::Client,
+) -> Result<u32, String> {
 	if let Some(block_height) = block_height {
 		return Ok(block_height);
 	}

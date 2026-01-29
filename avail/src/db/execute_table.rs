@@ -1,6 +1,6 @@
 use avail_rust::H256;
 
-use crate::db::Database;
+use crate::{common::SerializedExecute, db::Database};
 
 pub struct ExecuteTable;
 impl ExecuteTable {
@@ -17,7 +17,7 @@ impl ExecuteTable {
 				);
 			",
 			&db.execute_table_name,
-			&db.table_name
+			&db.main_table_name
 		);
 
 		sqlx::query(&q).execute(&db.conn).await.map_err(|e| e.to_string())?;
@@ -75,4 +75,17 @@ pub struct TableEntry {
 	pub slot: u64,
 	/// In the DB this is stored as "BIGINT NOT NULL"
 	pub message_id: u64,
+}
+
+impl TableEntry {
+	pub fn from_call(id: u64, call: &SerializedExecute) -> Self {
+		Self {
+			id,
+			kind: call.addr_message.message.kind().to_string(),
+			amount: call.addr_message.message.amount(),
+			to: call.addr_message.to,
+			slot: call.slot,
+			message_id: call.addr_message.id,
+		}
+	}
 }

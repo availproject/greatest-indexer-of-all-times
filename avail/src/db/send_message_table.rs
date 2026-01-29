@@ -1,6 +1,6 @@
 use avail_rust::H256;
 
-use crate::db::Database;
+use crate::{common::SerializedSendMessage, db::Database};
 
 pub struct SendMessageTable;
 impl SendMessageTable {
@@ -15,7 +15,7 @@ impl SendMessageTable {
 				);
 			",
 			&db.send_message_table_name,
-			&db.table_name
+			&db.main_table_name
 		);
 
 		sqlx::query(&q).execute(&db.conn).await.map_err(|e| e.to_string())?;
@@ -62,4 +62,15 @@ pub struct TableEntry {
 	pub amount: Option<u128>,
 	/// In the DB this is stored as "TEXT NOT NULL"
 	pub to: H256,
+}
+
+impl TableEntry {
+	pub fn from_call(id: u64, call: &SerializedSendMessage) -> Self {
+		Self {
+			id,
+			kind: call.message.kind().to_string(),
+			amount: call.message.amount(),
+			to: call.to,
+		}
+	}
 }

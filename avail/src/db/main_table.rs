@@ -1,38 +1,13 @@
-use avail_rust::H256;
-use sqlx::Row;
-use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::{Pool, Postgres, postgres::PgPoolOptions};
+use crate::db::Database;
+use avail_rust::{H256, block::BlockEncodedExtrinsic};
+use sqlx::{
+	Row,
+	types::chrono::{DateTime, Utc},
+};
 
-pub struct Database {
-	pub conn: Pool<Postgres>,
-	pub table_name: String,
-	pub send_message_table_name: String,
-	pub execute_table_name: String,
-}
-
-impl Database {
-	pub async fn new(
-		url: &str,
-		table_name: String,
-		send_message_table_name: String,
-		execute_table_name: String,
-	) -> Result<Self, String> {
-		let conn = PgPoolOptions::new()
-			.max_connections(5)
-			.connect(&url)
-			.await
-			.map_err(|x| x.to_string())?;
-		let s = Self {
-			conn,
-			table_name,
-			send_message_table_name,
-			execute_table_name,
-		};
-
-		Ok(s)
-	}
-
-	pub async fn create_table(&self) -> Result<(), String> {
+pub struct MainTable;
+impl MainTable {
+	pub async fn create_table(db: &Database) -> Result<(), String> {
 		let q = std::format!(
 			"
 				CREATE TABLE IF NOT EXISTS {} (
@@ -49,17 +24,17 @@ impl Database {
 					ext_call TEXT NOT NULL
 				);
 			",
-			self.table_name
+			db.main_table_name
 		);
 
-		sqlx::query(&q).execute(&self.conn).await.map_err(|e| e.to_string())?;
+		sqlx::query(&q).execute(&db.conn).await.map_err(|e| e.to_string())?;
 		Ok(())
 	}
 
-	pub async fn find_highest_block_height(&self) -> Result<Option<u32>, String> {
-		let q = std::format!("SELECT MAX(block_height) FROM {}", self.table_name);
+	pub async fn find_highest_block_height(db: &Database) -> Result<Option<u32>, String> {
+		let q = std::format!("SELECT MAX(block_height) FROM {}", db.main_table_name);
 		let row = sqlx::query(&q)
-			.fetch_optional(&self.conn)
+			.fetch_optional(&db.conn)
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -75,18 +50,7 @@ impl Database {
 		Ok(block_height)
 	}
 
-	pub async fn row_exists(&self, id: u64) -> Result<bool, String> {
-		let q = std::format!("SELECT EXISTS (SELECT 1 FROM {} WHERE id={})", self.table_name, id as i64);
-		let row = sqlx::query(&q).fetch_one(&self.conn).await.map_err(|e| e.to_string())?;
-
-		let exists = row
-			.try_get::<bool, _>("exists")
-			.map_err(|e| std::format!("Failed to convert exists. Error: {}", e.to_string()))?;
-
-		Ok(exists)
-	}
-
-	pub async fn insert(&self, value: DbEntry) -> Result<(), String> {
+	pub async fn insert(value: TableEntry, db: &Database) -> Result<(), String> {
 		let q = std::format!(
 			"
 				INSERT INTO {} (
@@ -115,7 +79,7 @@ impl Database {
 					ext_success = EXCLUDED.ext_success,
 					ext_call = EXCLUDED.ext_call
 			",
-			self.table_name
+			db.main_table_name
 		);
 		let block_timestamp = DateTime::<Utc>::from_timestamp(value.block_timestamp as i64, 0)
 			.ok_or_else(|| "Failed to convert block_timestamp to chrono DateTime".to_string())?;
@@ -131,7 +95,7 @@ impl Database {
 			.bind(value.variant_id as i16)
 			.bind(value.ext_success)
 			.bind(value.ext_call)
-			.execute(&self.conn)
+			.execute(&db.conn)
 			.await
 			.map_err(|e| e.to_string())?;
 
@@ -139,7 +103,7 @@ impl Database {
 	}
 }
 
-pub struct DbEntry {
+pub struct TableEntry {
 	/// In the DB this is stored as "BIGINT PRIMARY KEY"
 	pub id: u64,
 	/// In the DB this is stored as "INTEGER NOT NULL"
@@ -164,4 +128,27 @@ pub struct DbEntry {
 	// Call data JSON encoded
 	/// In the DB this is stored as "TEXT NOT NULL"
 	pub ext_call: String,
+}
+
+impl TableEntry {
+	pub fn from_block_ext(
+		block_height: u32,
+		block_hash: H256,
+		block_timestamp: u64,
+		ext: &BlockEncodedExtrinsic,
+	) -> Self {
+		Self {
+			id: (block_height as u64) << 32 | ext.metadata.ext_index as u64,
+			block_height,
+			block_hash,
+			block_timestamp,
+			ext_index: ext.metadata.ext_index,
+			ext_hash: ext.metadata.ext_hash,
+			signature_address: ext.ss58_address(),
+			pallet_id: ext.metadata.pallet_id,
+			variant_id: ext.metadata.variant_id,
+			ext_success: None,
+			ext_call: String::new(),
+		}
+	}
 }
