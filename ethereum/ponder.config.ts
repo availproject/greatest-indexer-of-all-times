@@ -21,7 +21,7 @@ export default createConfig({
       address:
         (process.env.BRIDGE_PROXY_ETH as Hex) ||
         "0x967F7DdC4ec508462231849AE81eeaa68Ad01389",
-      startBlock: 9755073,
+      startBlock: Number(process.env.BRIDGE_START_BLOCK),
     },
   },
 });
