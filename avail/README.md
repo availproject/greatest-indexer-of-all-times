@@ -12,6 +12,7 @@ The indexer reads configuration from:
 - `send_message_table_name` (optional): Send Message Table name. Defaults to `avail_send_message_table`.
 - `execute_table_name` (optional): Execute Table name. Defaults to `avail_execute_table`.
 - `block_height` (optional): Start from this block height. If missing, uses the latest stored block height from the DB.
+- `max_task_count` (optional): Maximum number of concurrent tasks to run. More tasks means more blocks will be fetch at the same time. The system automatically scales up and down the number of tasks but it will never exceed the max count.  Defaults to 25.
 
 
 ## config.json example
@@ -23,7 +24,7 @@ The indexer reads configuration from:
   "send_message_table_name": "avail_indexer_send_message",
   "execute_table_name": "avail_indexer_execute",
   "block_height": 1903463,
-  "task_count": 50
+  "max_task_count": 25
 }
 ```
 
@@ -39,7 +40,7 @@ TABLE_NAME=avail_indexer \
 SEND_MESSAGE_TABLE_NAME=avail_indexer_send_message \
 EXECUTE_TABLE_NAME=avail_indexer_execute \
 BLOCK_HEIGHT=1903463 \
-TASK_COUNT=50 \
+MAX_TASK_COUNT=25 \
 cargo run
 ```
 

@@ -34,7 +34,7 @@ fn main() {
 
 	runtime.block_on(async move {
 		let t1 = tokio::spawn(async {
-			let indexer = Indexer::new(config).await.unwrap();
+			let indexer = Indexer::new(config).await?;
 			indexer.run().await
 		});
 
