@@ -1,0 +1,4 @@
+[advisories]
+# Transitive dependency from avail-rust, no patch available yet
+ignore = ["RUSTSEC-2023-0071"]
+informational_warnings = ["unmaintained", "unsound"]
